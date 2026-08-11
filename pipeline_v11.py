@@ -89,9 +89,9 @@ def is_ok_relaxed(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes
     for x,y,w,h,rot in boxes_local:
         bx = text_bbox(x+dx,y+dy,w,h,rot)
         bx1,by1,bx2,by2 = bx
-        hpad = 0.25
-        bx_padded = (bx1-hpad, by1-hpad, bx2+hpad, by2+hpad)
         for poly, pname in hatch_polys:
+            this_pad = 0.0 if pname in exclude_line_names else 0.25
+            bx_padded = (bx1-this_pad, by1-this_pad, bx2+this_pad, by2+this_pad)
             if bbox_poly_overlap(bx_padded, poly):
                 return False
         for ob in placed_boxes:
@@ -129,12 +129,17 @@ def is_ok_full(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes, e
                 pass
             elif seg_intersects_bbox(seg[:4], test_box):
                 return False
-        # HATCH is a SOLID fill - never excluded, not even for the "own" column/beam.
-        # No tolerance either (full bbox, not shrunk core): sitting on top of hatch is
-        # always wrong regardless of whose hatch it is.
+        # HATCH is a SOLID fill - never excluded, not even for the "own" column/beam:
+        # actually sitting on top of hatch is always wrong regardless of whose hatch it is.
+        # BUT the safety padding (text-width underestimate buffer) is only meaningful
+        # against OTHER elements' hatch - a label naturally has to sit right at the edge
+        # of its OWN column's hatch, so padding there would push it needlessly far away.
         for poly, pname in hatch_polys:
-            hpad = 0.25  # generous safety margin - repeated real-world checks show text
-                         # width is underestimated by more than initially assumed
+            if pname in exclude_line_names:
+                hpad = 0.0
+            else:
+                hpad = 0.25  # generous safety margin - repeated real-world checks show
+                             # text width is underestimated by more than initially assumed
             bx_padded = (bx1-hpad, by1-hpad, bx2+hpad, by2+hpad)
             if bbox_poly_overlap(bx_padded, poly):
                 return False
@@ -225,42 +230,36 @@ def bar_and_text_slide(name, blocks, base_dx, base_dy, obstacle_lines, hatch_pol
     return 0.0, 0.0, 0.0, 0.0, False
 
 def radial_place_full(name, blocks, obstacle_lines, hatch_polys, placed_boxes, exclude_names,
-                       step=0.1, max_r=4.0):
+                       step=0.05, max_r=4.0):
     boxes_local = block_text_bboxes(blocks[name])
     if not boxes_local:
         return None
     home_bb = union_bbox(boxes_local)
-    # pass 1: try to find a fully clean (zero-crossing) spot, small radius first
+    # finer angular resolution close to home - with few sampled directions, a valid
+    # narrow gap right next to the text can be skipped entirely, forcing the search out
+    # to a much larger (and needlessly farther) radius where a wider spread happens to
+    # land on something free. At least 24 directions even at tiny radius avoids that.
+    def n_dirs_for(r):
+        return max(24, int(2*math.pi*r/step)) if r>0 else 1
+    # single ring-by-ring search, nearest radius first: at EACH radius, prefer a fully
+    # clean (zero-crossing) spot, then fall back to a relaxed one (max 1 tolerable line
+    # crossing) at that SAME radius before giving up and trying a larger radius. This
+    # guarantees the truly nearest usable spot, whether clean or single-crossing,
+    # instead of a strict search artificially capped at a smaller radius than a relaxed
+    # spot that's actually closer.
     r = 0.0
-    while r <= 1.2:
-        n_dirs = max(8, int(r/step)) if r>0 else 1
-        for k in range(n_dirs):
-            ang = 2*math.pi*k/n_dirs if r>0 else 0
-            ddx, ddy = r*math.cos(ang), r*math.sin(ang)
-            if is_ok_full(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names):
-                return ddx, ddy
-        r += step
-    # pass 2: allow up to 1 tolerable line-crossing (never hatch/text) if it keeps the
-    # result much closer than continuing the zero-crossing search further out - real
-    # engineers accept a single line grazing through whitespace rather than relocating far.
-    r = 0.0
-    while r <= 1.2:
-        n_dirs = max(8, int(r/step)) if r>0 else 1
-        for k in range(n_dirs):
-            ang = 2*math.pi*k/n_dirs if r>0 else 0
-            ddx, ddy = r*math.cos(ang), r*math.sin(ang)
-            if is_ok_relaxed(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names, max_crossings=1):
-                return ddx, ddy
-        r += step
-    # pass 3: fall back to the full zero-crossing search out to max_r
-    r = 1.2
     while r <= max_r:
-        n_dirs = max(8, int(r/step))
+        n_dirs = n_dirs_for(r) if r <= 1.2 else max(8, int(r/step))
+        relaxed_candidate = None
         for k in range(n_dirs):
-            ang = 2*math.pi*k/n_dirs
+            ang = 2*math.pi*k/n_dirs if r>0 else 0
             ddx, ddy = r*math.cos(ang), r*math.sin(ang)
             if is_ok_full(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names):
                 return ddx, ddy
+            if relaxed_candidate is None and is_ok_relaxed(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names, max_crossings=1):
+                relaxed_candidate = (ddx, ddy)
+        if relaxed_candidate:
+            return relaxed_candidate
         r += step
     return None
 

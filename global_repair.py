@@ -114,7 +114,7 @@ def try_move_text_only(name, blocks, insert_final, text_local_final, obstacle_li
         return None
     return None
 
-def try_move_bar(name, blocks, insert_final, obstacle_lines, hatch_polys, placed_boxes):
+def try_move_bar(name, blocks, insert_final, obstacle_lines, hatch_polys, placed_boxes, slab_polys=None):
     if not re.match(r'FL\d+_(BEAMBAR|SLABBAR)\d+$', name):
         return None
     lines,_ = block_lines_local(blocks[name])
@@ -129,9 +129,35 @@ def try_move_bar(name, blocks, insert_final, obstacle_lines, hatch_polys, placed
     px,py=-uy,ux
     dx,dy = insert_final.get(name,(0,0))
     boxes_local = block_text_bboxes(blocks[name])
+
+    # SLABBAR must never leave its own slab's boundary during a nudge.
+    poly = None
+    if slab_polys and re.match(r'FL\d+_SLABBAR\d+$', name):
+        native_xs = [p[0] for l in lines for p in [(l[0],l[1]),(l[2],l[3])]]
+        native_ys = [p[1] for l in lines for p in [(l[0],l[1]),(l[2],l[3])]]
+        ncx = (min(native_xs)+max(native_xs))/2 + dx
+        ncy = (min(native_ys)+max(native_ys))/2 + dy
+        best_slab=None; bd=1e9
+        for sname, sbox in slab_polys.items():
+            sx1,sy1,sx2,sy2 = sbox
+            if sx1<=ncx<=sx2 and sy1<=ncy<=sy2:
+                poly = sbox; break
+            ccx,ccy = (sx1+sx2)/2,(sy1+sy2)/2
+            d = math.hypot(ccx-ncx,ccy-ncy)
+            if d<bd: bd=d; best_slab=sbox
+        if poly is None:
+            poly = best_slab
+
     for s in [0.05*k for k in range(1,30)]:
         for sign in (1,-1):
             ndx,ndy = dx+px*s*sign, dy+py*s*sign
+            if poly:
+                lines_chk = [(a+ndx,b+ndy,c+ndx,d+ndy) for a,b,c,d in lines]
+                nxs = [p[0] for seg in lines_chk for p in [(seg[0],seg[1]),(seg[2],seg[3])]]
+                nys = [p[1] for seg in lines_chk for p in [(seg[0],seg[1]),(seg[2],seg[3])]]
+                px1,py1,px2,py2 = poly
+                if min(nxs)<px1-0.01 or max(nxs)>px2+0.01 or min(nys)<py1-0.01 or max(nys)>py2+0.01:
+                    continue
             lines_new = [(a+ndx,b+ndy,c+ndx,d+ndy,name) for a,b,c,d in lines]
             bar_ok = True
             for seg in lines_new:
