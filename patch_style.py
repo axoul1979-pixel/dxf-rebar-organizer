@@ -45,6 +45,48 @@ def patch_layer_colors(input_path, output_path, color_map=None):
         f.write(sep.join(lines))
     return patched
 
+def patch_hatch_scale_by_layer(input_path, output_path, layer_name, new_scale, orig_scale=0.02):
+    """Rescale HATCH entities ONLY on a specific layer (unlike patch_style's hatch_scale
+    which applies globally to every HATCH). Rescales both the pattern-scale (group 41)
+    and the 45/46 line-offset vectors proportionally, same logic as patch_style."""
+    with open(input_path, 'r', encoding='latin-1', newline='') as f:
+        raw = f.read()
+    uses_crlf = '\r\n' in raw
+    lines = raw.split('\n')
+    lines = [l[:-1] if l.endswith('\r') else l for l in lines]
+
+    scale_ratio = new_scale / orig_scale
+    n_scale = 0
+    i = 0
+    while i < len(lines) - 1:
+        code = lines[i].strip()
+        if code == '0' and lines[i+1].strip() == 'HATCH':
+            j = i + 2
+            layer = None
+            while j < len(lines) - 1 and lines[j].strip() != '0':
+                if lines[j].strip() == '8' and layer is None:
+                    layer = lines[j+1].strip()
+                j += 2
+            if layer == layer_name:
+                j = i + 2
+                while j < len(lines) - 1 and lines[j].strip() != '0':
+                    c = lines[j].strip()
+                    if c == '41':
+                        lines[j+1] = repr(float(new_scale))
+                        n_scale += 1
+                    elif c in ('45','46'):
+                        cur = float(lines[j+1])
+                        lines[j+1] = repr(cur * scale_ratio)
+                    j += 2
+            i = j
+            continue
+        i += 1
+
+    sep = '\r\n' if uses_crlf else '\n'
+    with open(output_path, 'w', encoding='latin-1', newline='') as f:
+        f.write(sep.join(lines))
+    return n_scale
+
 def patch_style(input_path, output_path, slab_poly_color=4, hatch_scale=0.02, orig_hatch_scale=0.1,
                  slab_center_color=None):
     """slab_poly_color: ACI color index (4=cyan). hatch_scale: new pattern scale - also

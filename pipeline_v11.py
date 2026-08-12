@@ -231,11 +231,12 @@ def bar_and_text_slide(name, blocks, base_dx, base_dy, obstacle_lines, hatch_pol
     return 0.0, 0.0, 0.0, 0.0, False
 
 def radial_place_full(name, blocks, obstacle_lines, hatch_polys, placed_boxes, exclude_names,
-                       step=0.05, max_r=4.0):
+                       step=0.05, max_r=4.0, seed=(0.0,0.0)):
     boxes_local = block_text_bboxes(blocks[name])
     if not boxes_local:
         return None
     home_bb = union_bbox(boxes_local)
+    sdx, sdy = seed
     # finer angular resolution close to home - with few sampled directions, a valid
     # narrow gap right next to the text can be skipped entirely, forcing the search out
     # to a much larger (and needlessly farther) radius where a wider spread happens to
@@ -247,14 +248,15 @@ def radial_place_full(name, blocks, obstacle_lines, hatch_polys, placed_boxes, e
     # crossing) at that SAME radius before giving up and trying a larger radius. This
     # guarantees the truly nearest usable spot, whether clean or single-crossing,
     # instead of a strict search artificially capped at a smaller radius than a relaxed
-    # spot that's actually closer.
+    # spot that's actually closer. The search is centered on `seed` (usually near the
+    # actual structural element the label belongs to), not necessarily (0,0).
     r = 0.0
     while r <= max_r:
         n_dirs = n_dirs_for(r) if r <= 1.2 else max(8, int(r/step))
         relaxed_candidate = None
         for k in range(n_dirs):
             ang = 2*math.pi*k/n_dirs if r>0 else 0
-            ddx, ddy = r*math.cos(ang), r*math.sin(ang)
+            ddx, ddy = sdx + r*math.cos(ang), sdy + r*math.sin(ang)
             if is_ok_full(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names):
                 return ddx, ddy
             if relaxed_candidate is None and is_ok_relaxed(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names, max_crossings=1):
@@ -451,7 +453,22 @@ def process_all(input_path, is_training_file=False):
     for name in names:
         own_col = re.match(r'(FL-?\d+_)COLUMN_TEXT(\d+)$',name).group(1)+'COLUMN'+re.search(r'\d+$',name).group()
         tot += 1
-        res = radial_place_full(name, blocks, bar_obstacle_lines, hatch_polys, placed_boxes, (own_col,))
+        # start the search centered near the ACTUAL column, not the text's native local
+        # anchor - the two can be far apart (the native anchor is just wherever the
+        # drafting software happened to place the block's local origin, with no
+        # guarantee of proximity to the column it labels).
+        col_lines,_ = block_lines_local(blocks[own_col])
+        seed_dx, seed_dy = 0.0, 0.0
+        if col_lines:
+            cxs = [p[0] for l in col_lines for p in [(l[0],l[1]),(l[2],l[3])]]
+            cys = [p[1] for l in col_lines for p in [(l[0],l[1]),(l[2],l[3])]]
+            col_cx, col_cy = (min(cxs)+max(cxs))/2, (min(cys)+max(cys))/2
+            bl0 = block_text_bboxes(blocks[name])
+            if bl0:
+                home_bb0 = union_bbox(bl0)
+                text_cx, text_cy = (home_bb0[0]+home_bb0[2])/2, (home_bb0[1]+home_bb0[3])/2
+                seed_dx, seed_dy = col_cx - text_cx, col_cy - text_cy
+        res = radial_place_full(name, blocks, bar_obstacle_lines, hatch_polys, placed_boxes, (own_col,), seed=(seed_dx, seed_dy))
         if res is None:
             insert_final[name] = (0.0,0.0)
             continue
@@ -738,6 +755,92 @@ def process_all(input_path, is_training_file=False):
             break
     remaining_circle = len(circle_conflicts())
     print(f'CIRCLE REPAIR: {remaining_circle} slab-marker/rebar circle conflicts remain')
+
+    # === AUTOMATIC CROSS-CATEGORY REPAIR: a rebar (beambar/slabbar) LINE crossing
+    # someone else's TEXT (beam_text, column_text, slab-marker, or other rebar's own
+    # text) is just as real a defect as rebar-vs-rebar - check and fix it the same way,
+    # automatically, without needing to be asked. ===
+    def all_placed_text_boxes(exclude_name=None):
+        out = []
+        for n2 in blocks:
+            if n2 == exclude_name:
+                continue
+            bl2 = block_text_bboxes(blocks[n2]) if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR|BEAM_TEXT|COLUMN_TEXT)\d+$', n2) else (slab_marker_boxes(blocks[n2]) if re.match(r'FL-?\d+_SLAB\d+$', n2) else None)
+            if not bl2:
+                continue
+            d2x,d2y = insert_final.get(n2,(0,0))
+            if re.match(r'FL-?\d+_BEAMBAR',n2) and d2x<=-49:
+                continue
+            t2x,t2y = text_local_final.get(n2,(0,0))
+            for x,y,w,h,rot in bl2:
+                out.append((text_bbox(x+d2x+t2x,y+d2y+t2y,w,h,rot), n2))
+        return out
+
+    def rebar_vs_text_conflicts():
+        confl = []
+        for name in REBAR_NAMES:
+            dx,dy = insert_final.get(name,(0,0))
+            if re.match(r'FL-?\d+_BEAMBAR',name) and dx<=-49:
+                continue
+            # 1) rebar's own LINE crossing someone else's text
+            lines,_ = block_lines_local(blocks[name])
+            for x1,y1,x2,y2 in lines:
+                seg = (x1+dx,y1+dy,x2+dx,y2+dy)
+                for bx,oname in all_placed_text_boxes(exclude_name=name):
+                    if oname == name:
+                        continue
+                    if seg_intersects_bbox(seg, bx):
+                        confl.append((name,oname))
+            # 2) rebar's own TEXT box overlapping someone else's text box (e.g. a
+            # slabbar/beambar label sitting right on top of a column_text/beam_text
+            # label) - just as real a defect, previously never checked.
+            tdx,tdy = text_local_final.get(name,(0,0))
+            own_bl = block_text_bboxes(blocks[name])
+            for x,y,w,h,rot in own_bl:
+                mybx = text_bbox(x+dx+tdx,y+dy+tdy,w,h,rot)
+                for obx,oname in all_placed_text_boxes(exclude_name=name):
+                    if oname == name:
+                        continue
+                    if not (mybx[2]<obx[0] or obx[2]<mybx[0] or mybx[3]<obx[1] or obx[3]<mybx[1]):
+                        confl.append((name,oname))
+        return confl
+
+    for _pass in range(4):
+        conflicts2 = rebar_vs_text_conflicts()
+        if not conflicts2:
+            break
+        fixed_any2 = False
+        seen2 = set()
+        for name, oname in set(conflicts2):
+            if name in seen2:
+                continue
+            # try sliding just the rebar's own text along its bar first
+            placed = [b for b,n2 in all_placed_text_boxes(exclude_name=name)]
+            dx,dy = insert_final.get(name,(0,0))
+            tdx,tdy,good = text_only_slide(name, blocks, dx, dy, obstacle_lines, hatch_polys, placed)
+            if good:
+                text_local_final[name] = (tdx,tdy)
+                fixed_any2 = True; seen2.add(name)
+                continue
+            # fallback: small perpendicular nudge of the bar itself
+            lines,_ = block_lines_local(blocks[name])
+            if not lines:
+                continue
+            nx,ny = -spine_and_bounds(lines)[0][1], spine_and_bounds(lines)[0][0]
+            success = False
+            for s in [0.05*k for k in range(1,25)]:
+                for sign in (1,-1):
+                    ndx,ndy = dx+nx*s*sign, dy+ny*s*sign
+                    boxes_local = block_text_bboxes(blocks[name])
+                    if is_ok_full(boxes_local, ndx, ndy, obstacle_lines, hatch_polys, placed, (name,)):
+                        insert_final[name] = (ndx,ndy)
+                        if name in text_local_final: del text_local_final[name]
+                        success = True; fixed_any2 = True; seen2.add(name)
+                        break
+                if success: break
+        if not fixed_any2:
+            break
+    print(f'CROSS-CATEGORY REPAIR: {len(rebar_vs_text_conflicts())} rebar-vs-other-text conflicts remain')
 
     return insert_final, text_local_final
 

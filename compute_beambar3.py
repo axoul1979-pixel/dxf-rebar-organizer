@@ -89,13 +89,11 @@ def compute_beambar_offsets(input_path):
         if not candidates:
             debug[name]='no candidate beam'
             continue
-        candidates.sort(key=lambda c: c[0])
-        # tie-break: among candidates within 0.35 of the closest distance, prefer better
-        # axis-range overlap and hook-direction alignment (a real structural clue) - but
-        # never let these override a clearly-closer candidate outside that margin.
-        best_dist = candidates[0][0]
-        close_ones = [c for c in candidates if c[0] <= best_dist + 0.35]
-        def tie_score(c):
+        # global combined score across ALL candidates - overlap is a strong structural
+        # signal (a bar genuinely spanning most of a beam's length is very likely the
+        # correct match even if a poorly-aligned closer beam exists) so it must compete
+        # globally, not just as a tie-break among near-equal distances.
+        def combined_score(c):
             _, bname, segs, dist, overlap_frac = c
             hook_bonus = 0.0
             if hook_dir:
@@ -106,9 +104,10 @@ def compute_beambar_offsets(input_path):
                     to_beam_n = (to_beam[0]/tbl, to_beam[1]/tbl)
                     align = hook_dir[0]*to_beam_n[0] + hook_dir[1]*to_beam_n[1]
                     hook_bonus = -0.3*align
-            return dist - 0.6*overlap_frac + hook_bonus
-        close_ones.sort(key=tie_score)
-        score, bname, segs, dist, overlap_frac = close_ones[0]
+            return dist + (1.0-overlap_frac)*2.0 + hook_bonus
+        candidates.sort(key=combined_score)
+        best = candidates[0]
+        score, bname, segs, dist, overlap_frac = best
 
         bar_perp = spine_mid[0]*nx+spine_mid[1]*ny
         edge_perps = [sx1*nx+sy1*ny for sx1,sy1,sx2,sy2 in segs]
