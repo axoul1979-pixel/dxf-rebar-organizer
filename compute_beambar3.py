@@ -12,7 +12,7 @@ def compute_beambar_offsets(input_path):
     ins, blocks = load_all(input_path)
     beam_edges = {}
     for name, pairlist in blocks.items():
-        if re.match(r'FL\d+_BEAM\d+$', name):
+        if re.match(r'FL-?\d+_BEAM\d+$', name):
             ox, oy = ins.get(name,(0,0))
             lines, _ = block_lines_local(pairlist)
             segs = [(x1+ox,y1+oy,x2+ox,y2+oy) for x1,y1,x2,y2 in lines]
@@ -22,7 +22,7 @@ def compute_beambar_offsets(input_path):
     results = {}
     debug = {}
     for name, pairlist in blocks.items():
-        if not re.match(r'FL\d+_BEAMBAR\d+$', name):
+        if not re.match(r'FL-?\d+_BEAMBAR\d+$', name):
             continue
         lines, mtexts = block_lines_local(pairlist)
         if not lines or not mtexts:

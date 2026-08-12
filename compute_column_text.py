@@ -62,7 +62,7 @@ def compute_column_text_offsets(input_path):
     # since we run this independently; caller may pass beam-updated ins if desired)
     obstacle_lines = []
     for name, pairlist in blocks.items():
-        if re.match(r'FL\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$', name) and 'TEXT' not in name:
+        if re.match(r'FL-?\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$', name) and 'TEXT' not in name:
             ox,oy = ins.get(name,(0,0))
             lines,_ = block_lines_local(pairlist)
             for x1,y1,x2,y2 in lines:
@@ -76,7 +76,7 @@ def compute_column_text_offsets(input_path):
     results = {}
     debug = {}
 
-    names = sorted([n for n in blocks if re.match(r'FL\d+_COLUMN_TEXT\d+$', n)],
+    names = sorted([n for n in blocks if re.match(r'FL-?\d+_COLUMN_TEXT\d+$', n)],
                     key=lambda n: int(re.search(r'\d+$', n).group()))
 
     for name in names:

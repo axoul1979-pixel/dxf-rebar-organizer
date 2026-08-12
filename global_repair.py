@@ -3,12 +3,12 @@ from analyze import entities_from_pairs, to_dict
 import pickle, re, math
 
 def own_of(name):
-    m = re.match(r'FL\d+_(BEAM|COLUMN)_TEXT(\d+)$', name)
-    if m: return f'FL1_{m.group(1)}{m.group(2)}'
-    m = re.match(r'FL\d+_(BEAMBAR|SLABBAR)(\d+)$', name)
+    m = re.match(r'(FL-?\d+_)(BEAM|COLUMN)_TEXT(\d+)$', name)
+    if m: return f'{m.group(1)}{m.group(2)}{m.group(3)}'
+    m = re.match(r'(FL-?\d+_)(BEAMBAR|SLABBAR)(\d+)$', name)
     if m:
-        kind = 'BEAM' if m.group(1)=='BEAMBAR' else 'SLAB'
-        return f'FL1_{kind}{m.group(2)}'
+        kind = 'BEAM' if m.group(2)=='BEAMBAR' else 'SLAB'
+        return f'{m.group(1)}{kind}{m.group(3)}'
     return None
 
 def get_all_boxes(blocks, ins, insert_final, text_local_final, exclude=None):
@@ -18,7 +18,7 @@ def get_all_boxes(blocks, ins, insert_final, text_local_final, exclude=None):
         bl = block_text_bboxes(blocks[name])
         if not bl: continue
         dx,dy = insert_final.get(name,(0,0))
-        if re.match(r'FL\d+_BEAMBAR',name) and dx<=-49: continue
+        if re.match(r'FL-?\d+_BEAMBAR',name) and dx<=-49: continue
         tdx,tdy = text_local_final.get(name,(0,0))
         for x,y,w,h,rot in bl:
             boxes.append((text_bbox(x+dx+tdx,y+dy+tdy,w,h,rot), name))
@@ -28,10 +28,10 @@ def get_all_lines(blocks, ins, insert_final, exclude=None):
     lines_out = []
     for name in blocks:
         if name == exclude: continue
-        if not re.match(r'FL\d+_(COLUMN|BEAM|SLAB|FREENODE|BEAMBAR|SLABBAR)\d*$', name) or 'TEXT' in name:
+        if not re.match(r'FL-?\d+_(COLUMN|BEAM|SLAB|FREENODE|BEAMBAR|SLABBAR)\d*$', name) or 'TEXT' in name:
             continue
         dx,dy = insert_final.get(name,(0,0))
-        if re.match(r'FL\d+_BEAMBAR',name) and dx<=-49: continue
+        if re.match(r'FL-?\d+_BEAMBAR',name) and dx<=-49: continue
         lines,_ = block_lines_local(blocks[name])
         for x1,y1,x2,y2 in lines:
             lines_out.append((x1+dx,y1+dy,x2+dx,y2+dy,name))
@@ -41,7 +41,7 @@ def get_all_circles(blocks, ins, insert_final, text_local_final, exclude=None):
     circles = []
     for name in blocks:
         if name == exclude: continue
-        if not re.match(r'FL\d+_SLAB\d+$', name): continue
+        if not re.match(r'FL-?\d+_SLAB\d+$', name): continue
         ox,oy = ins.get(name,(0,0))
         tdx,tdy = text_local_final.get(name,(0,0))
         for e in entities_from_pairs(blocks[name]):
@@ -84,7 +84,7 @@ def find_conflicts(blocks, ins, insert_final, text_local_final, hatch_polys, reb
 def try_move_text_only(name, blocks, insert_final, text_local_final, obstacle_lines, hatch_polys, placed_boxes, extra_bad_names=()):
     """try sliding just the text of `name` along its own bar/beam axis (or radially if it's
     a column_text/slab-marker with free movement) to clear ALL given obstacles."""
-    if re.match(r'FL\d+_COLUMN_TEXT\d+$', name):
+    if re.match(r'FL-?\d+_COLUMN_TEXT\d+$', name):
         own_col = own_of(name)
         bl = block_text_bboxes(blocks[name])
         home_bb = union_bbox(bl)
@@ -98,9 +98,9 @@ def try_move_text_only(name, blocks, insert_final, text_local_final, obstacle_li
                     return ('insert', ddx,ddy)
             r+=0.1
         return None
-    if re.match(r'FL\d+_SLAB\d+$', name):
+    if re.match(r'FL-?\d+_SLAB\d+$', name):
         return None  # handled separately (has circle)
-    if re.match(r'FL\d+_(BEAMBAR|SLABBAR)\d+$', name):
+    if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', name):
         dx,dy = insert_final.get(name,(0,0))
         bl = block_lines_local(blocks[name])[0]
         boxes_local = block_text_bboxes(blocks[name])
@@ -108,14 +108,14 @@ def try_move_text_only(name, blocks, insert_final, text_local_final, obstacle_li
         tdx,tdy,good = text_only_slide(name, blocks, dx, dy, obstacle_lines, hatch_polys, placed_boxes)
         if good: return ('text_local', tdx, tdy)
         return None
-    if re.match(r'FL\d+_BEAM_TEXT\d+$', name):
+    if re.match(r'FL-?\d+_BEAM_TEXT\d+$', name):
         res = beam_text_slide(name, blocks, obstacle_lines, hatch_polys, placed_boxes)
         if res: return ('insert', res[0], res[1])
         return None
     return None
 
 def try_move_bar(name, blocks, insert_final, obstacle_lines, hatch_polys, placed_boxes, slab_polys=None):
-    if not re.match(r'FL\d+_(BEAMBAR|SLABBAR)\d+$', name):
+    if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', name):
         return None
     lines,_ = block_lines_local(blocks[name])
     if not lines: return None
@@ -132,7 +132,7 @@ def try_move_bar(name, blocks, insert_final, obstacle_lines, hatch_polys, placed
 
     # SLABBAR must never leave its own slab's boundary during a nudge.
     poly = None
-    if slab_polys and re.match(r'FL\d+_SLABBAR\d+$', name):
+    if slab_polys and re.match(r'FL-?\d+_SLABBAR\d+$', name):
         native_xs = [p[0] for l in lines for p in [(l[0],l[1]),(l[2],l[3])]]
         native_ys = [p[1] for l in lines for p in [(l[0],l[1]),(l[2],l[3])]]
         ncx = (min(native_xs)+max(native_xs))/2 + dx

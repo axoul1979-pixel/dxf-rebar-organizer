@@ -26,7 +26,7 @@ def spiral_place(name, blocks, obstacle_lines, placed_boxes, exclude_names=()):
 
 def compute_beam_text_offsets(input_path, obstacle_lines, placed_boxes):
     ins, blocks = load_all(input_path)
-    names = sorted([n for n in blocks if re.match(r'FL\d+_BEAM_TEXT\d+$', n)],
+    names = sorted([n for n in blocks if re.match(r'FL-?\d+_BEAM_TEXT\d+$', n)],
                     key=lambda n: int(re.search(r'\d+$', n).group()))
     results = {}
     for name in names:
@@ -134,7 +134,7 @@ def slab_marker_boxes(pairlist):
 
 def compute_slab_marker_offsets(input_path, obstacle_lines, placed_boxes):
     ins, blocks = load_all(input_path)
-    names = sorted([n for n in blocks if re.match(r'FL\d+_SLAB\d+$', n)],
+    names = sorted([n for n in blocks if re.match(r'FL-?\d+_SLAB\d+$', n)],
                     key=lambda n: int(re.search(r'\d+$', n).group()))
     results = {}
     for name in names:

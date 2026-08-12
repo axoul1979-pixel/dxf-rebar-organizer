@@ -22,13 +22,13 @@ def compute_slabbar_offsets(input_path):
 
     obstacle_lines = []
     for name, pairlist in blocks.items():
-        if re.match(r'FL\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$', name) and 'TEXT' not in name and 'SLABBAR' not in name:
+        if re.match(r'FL-?\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$', name) and 'TEXT' not in name and 'SLABBAR' not in name:
             ox,oy = ins.get(name,(0,0))
             lines,_ = block_lines_local(pairlist)
             for x1,y1,x2,y2 in lines:
                 obstacle_lines.append((x1+ox,y1+oy,x2+ox,y2+oy,name))
 
-    names = sorted([n for n in blocks if re.match(r'FL\d+_SLABBAR\d+$', n)],
+    names = sorted([n for n in blocks if re.match(r'FL-?\d+_SLABBAR\d+$', n)],
                     key=lambda n: int(re.search(r'\d+$', n).group()))
 
     placed_boxes = []

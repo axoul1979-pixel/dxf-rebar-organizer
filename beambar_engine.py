@@ -64,7 +64,7 @@ def load_beambars(path, prefix='BEAMBAR'):
     blocks = get_all_blocks(path)
     result = {}
     for name in blocks:
-        if re.match(rf'FL\d+_{prefix}\d+$', name):
+        if re.match(rf'FL-?\d+_{prefix}\d+$', name):
             ents = entities_from_pairs(blocks[name])
             b = Block(name, ents)
             if b.text is not None and b.lines:

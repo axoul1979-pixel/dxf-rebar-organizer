@@ -53,9 +53,7 @@
     content:'';position:absolute;top:-1px;left:16px;width:60px;height:1px;background:var(--cyan);
   }
 
-  .drop{
-    margin-top:28px;padding:0;
-  }
+  .drop{margin-top:28px;padding:0;}
   .dropzone{
     border:1.5px dashed #2a3543;border-radius:2px;
     padding:52px 24px;text-align:center;cursor:pointer;
@@ -120,20 +118,11 @@
   .console .err{color:var(--red);}
   .console .hd{color:var(--cyan);}
 
-  .result{
-    display:none;border-top:1px solid var(--grid);padding:24px 20px;
-  }
+  .result{display:none;border-top:1px solid var(--grid);padding:24px 20px;}
   .result.show{display:block;}
   .result-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
   .result-head .dot{width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0;}
   .result-head span{font-family:var(--mono);font-size:13px;color:var(--green);text-transform:uppercase;letter-spacing:.05em;}
-  .stats{
-    display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;
-    background:var(--grid);border:1px solid var(--grid);margin-bottom:20px;
-  }
-  .stat{background:var(--panel);padding:14px 16px;}
-  .stat .n{font-family:var(--mono);font-size:20px;color:var(--ink);font-weight:600;}
-  .stat .l{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.06em;margin-top:3px;}
   .download-btn{
     display:inline-flex;align-items:center;gap:10px;
     font-family:var(--mono);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
@@ -141,6 +130,10 @@
     padding:13px 22px;cursor:pointer;text-decoration:none;
   }
   .download-btn:hover{background:#f5d668;}
+
+  .swatches{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--ink-dim);}
+  .swatch{display:flex;align-items:center;gap:6px;}
+  .swatch i{width:10px;height:10px;border-radius:2px;display:inline-block;}
 
   footer{margin-top:36px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);line-height:1.8;}
   footer a{color:var(--cyan);text-decoration:none;}
@@ -151,11 +144,6 @@
     background:rgba(232,195,74,0.05);font-size:13px;color:var(--ink-dim);line-height:1.6;
   }
   .notice b{color:var(--ink);}
-
-  @media (prefers-reduced-motion: no-preference){
-    .drop-icon{transition:transform .2s ease;}
-    .dropzone:hover .drop-icon{transform:translateY(-2px);}
-  }
 </style>
 </head>
 <body>
@@ -163,7 +151,13 @@
   <header>
     <div class="eyebrow">DXF · REBAR AUTO-TIDY</div>
     <h1>Τακτοποίηση οπλισμού<br><span class="accent">απευθείας στο browser.</span></h1>
-    <p class="lede">Ανέβασε ένα DXF από στατικό λογισμικό — <b>το εργαλείο μετακινεί μόνο θέσεις κειμένου/ετικετών</b> (ποτέ αριθμούς ή περιεχόμενο οπλισμού) ώστε να αποφεύγονται επικαλύψεις με γραμμές, hatch, και άλλα κείμενα. Όλη η επεξεργασία γίνεται τοπικά στον υπολογιστή σου· το αρχείο δεν φεύγει πουθενά.</p>
+    <p class="lede">Ανέβασε ένα DXF από στατικό λογισμικό — <b>το εργαλείο μετακινεί μόνο θέσεις κειμένου/ετικετών</b> (ποτέ αριθμούς ή περιεχόμενο οπλισμού) ώστε να αποφεύγονται επικαλύψεις με γραμμές, hatch, κυκλάκια πλάκας, και άλλα κείμενα, και βάφει layers για ευαναγνωσία. Όλη η επεξεργασία γίνεται τοπικά στον υπολογιστή σου.</p>
+    <div class="swatches">
+      <div class="swatch"><i style="background:#3ad6d6"></i>slab_poly</div>
+      <div class="swatch"><i style="background:#e8c34a"></i>slab_center / slab_name / beambar_name / slabbar_name / beam_prefix_name_beton</div>
+      <div class="swatch"><i style="background:#d34fb0"></i>slabbar_line</div>
+      <div class="swatch"><i style="background:#4f7fd3"></i>slab_prefix_name</div>
+    </div>
   </header>
 
   <div class="panel">
@@ -186,7 +180,6 @@
     <div class="console" id="console"></div>
     <div class="result" id="result">
       <div class="result-head"><span class="dot"></span><span>Ολοκληρώθηκε</span></div>
-      <div class="stats" id="stats"></div>
       <a class="download-btn" id="downloadBtn" download>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
         Λήψη τακτοποιημένου DXF
@@ -195,7 +188,7 @@
   </div>
 
   <div class="notice">
-    <b>Γνωστά όρια:</b> η αντιστοίχιση ράβδου↔δοκού (~80% ακρίβεια σε έλεγχο) και ράβδου↔πλάκας (χαμηλότερη ακρίβεια) βασίζονται σε γεωμετρική εκτίμηση — έλεγξε πάντα οπτικά το αποτέλεσμα πριν το εμπιστευτείς για κατασκευή. Το εργαλείο προτείνει θέσεις, δεν αντικαθιστά τον έλεγχο μηχανικού.
+    <b>Γνωστά όρια:</b> η αντιστοίχιση ράβδου↔δοκού (~80% ακρίβεια σε έλεγχο) βασίζεται σε γεωμετρική εκτίμηση, και δεν εξετάζει ακόμα κολώνες ως πιθανό στόχο αγκύρωσης (μόνο δοκούς) — έλεγξε πάντα οπτικά το αποτέλεσμα πριν το εμπιστευτείς για κατασκευή. Το εργαλείο προτείνει θέσεις, δεν αντικαθιστά τον έλεγχο μηχανικού.
   </div>
 
   <footer>
@@ -222,7 +215,6 @@ const runBtn = document.getElementById('runBtn');
 const runStatus = document.getElementById('runStatus');
 const consoleEl = document.getElementById('console');
 const resultEl = document.getElementById('result');
-const statsEl = document.getElementById('stats');
 const downloadBtn = document.getElementById('downloadBtn');
 
 let selectedFile = null;
@@ -326,7 +318,7 @@ from pipeline_v11 import process_all
 from beambar_engine import get_inserts
 from patcher import patch_dxf, patch_block_mtext
 from patch_slab_marker import patch_slab_marker_geometry
-from patch_style import patch_style
+from patch_style import patch_layer_colors, patch_style
 from analyze import get_all_blocks, entities_from_pairs, to_dict
 
 input_path = '/home/pyodide/input_uploaded.dxf'
@@ -336,7 +328,7 @@ insert_final, text_local_final = process_all(input_path, is_training_file=False)
 ins_native = dict((n,(x,y)) for n,x,y in get_inserts(input_path))
 fixed = dict(insert_final)
 for name in list(fixed.keys()):
-    if re.match(r'FL\\d+_COLUMN_TEXT\\d+$', name):
+    if re.match(r'FL-?\\d+_COLUMN_TEXT\\d+$', name):
         nx, ny = ins_native.get(name, (0.0,0.0))
         dx, dy = fixed[name]
         fixed[name] = (dx - nx, dy - ny)
@@ -354,39 +346,13 @@ for name,(dx,dy) in text_local_final.items():
     block_layer_offsets[name] = (dx,dy,layers)
 n2 = patch_block_mtext('/home/pyodide/s1.dxf', '/home/pyodide/s2.dxf', block_layer_offsets)
 
-marker_deltas = {name:(dx,dy) for name,(dx,dy) in text_local_final.items() if re.match(r'FL\\d+_SLAB\\d+$',name)}
+marker_deltas = {name:(dx,dy) for name,(dx,dy) in text_local_final.items() if re.match(r'FL-?\\d+_SLAB\\d+$',name)}
 n3 = patch_slab_marker_geometry('/home/pyodide/s2.dxf', '/home/pyodide/s3.dxf', marker_deltas)
 
-def patch_layer_color(ip, op, layer_name, new_color):
-    with open(ip, 'r', encoding='latin-1', newline='') as f:
-        raw = f.read()
-    uses_crlf = '\\r\\n' in raw
-    lines = raw.split('\\n')
-    lines = [l[:-1] if l.endswith('\\r') else l for l in lines]
-    i = 0
-    while i < len(lines)-1:
-        if lines[i].strip()=='2' and lines[i+1].strip()==layer_name:
-            j = i+2
-            while j < len(lines)-1 and lines[j].strip() != '0':
-                if lines[j].strip()=='62':
-                    lines[j+1] = str(new_color)
-                    break
-                j += 2
-        i += 1
-    sep = '\\r\\n' if uses_crlf else '\\n'
-    with open(op,'w',encoding='latin-1',newline='') as f:
-        f.write(sep.join(lines))
+patched_colors = patch_layer_colors('/home/pyodide/s3.dxf', '/home/pyodide/s4.dxf')
+print('Layers χρωματίστηκαν:', list(patched_colors.keys()))
 
-cur = '/home/pyodide/s3.dxf'
-for i,(layer,color) in enumerate([('slab_poly',4),('slab_center',2),('beam_prefix_name_beton',2),('slab_name',2),('beambar_name',2),('slabbar_name',2)]):
-    nxt = f'/home/pyodide/c{i}.dxf'
-    try:
-        patch_layer_color(cur, nxt, layer, color)
-        cur = nxt
-    except Exception:
-        pass
-
-patch_style(cur, '/home/pyodide/output.dxf', hatch_scale=0.02, orig_hatch_scale=0.1)
+patch_style('/home/pyodide/s4.dxf', '/home/pyodide/output.dxf', hatch_scale=0.02, orig_hatch_scale=0.1)
 
 import json
 json.dumps({'ok':True})
@@ -402,7 +368,6 @@ json.dumps({'ok':True})
 
     log('Ολοκληρώθηκε.', 'ok');
     resultEl.classList.add('show');
-    statsEl.innerHTML = '';
     runStatus.textContent = '';
   } catch(err){
     log('ΣΦΑΛΜΑ: ' + err.message, 'err');

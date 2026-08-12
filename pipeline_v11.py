@@ -1,4 +1,5 @@
 import re, math, pickle
+from analyze import entities_from_pairs, to_dict
 from engine import load_all, block_lines_local
 from compute_column_text import block_text_bboxes, union_bbox, translate_bbox, collides
 from beambar_engine import seg_intersects_bbox, text_bbox, get_inserts as _get_inserts_early
@@ -12,7 +13,7 @@ def get_slab_polys(input_path):
     ins, blocks = load_all(input_path)
     boxes = {}
     for name, pairlist in blocks.items():
-        if not re.match(r'FL\d+_SLAB\d+$', name):
+        if not re.match(r'FL-?\d+_SLAB\d+$', name):
             continue
         ox,oy = ins.get(name,(0,0))
         ents = entities_from_pairs(pairlist)
@@ -41,7 +42,7 @@ MAX_SLIDE = 2.0
 def build_obstacle_lines(blocks, ins):
     obstacle_lines = []
     for name, pairlist in blocks.items():
-        if re.match(r'FL\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$', name) and 'TEXT' not in name:
+        if re.match(r'FL-?\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$', name) and 'TEXT' not in name:
             ox,oy = ins.get(name,(0,0))
             lines,_ = block_lines_local(pairlist)
             for x1,y1,x2,y2 in lines:
@@ -272,7 +273,7 @@ def beam_span(lines):
     return ux,uy,min(ts),max(ts)
 
 def beam_text_slide(name, blocks, obstacle_lines, hatch_polys, placed_boxes):
-    own_beam = re.match(r'(FL\d+_)BEAM_TEXT(\d+)$',name).group(1)+'BEAM'+re.search(r'\d+$',name).group()
+    own_beam = re.match(r'(FL-?\d+_)BEAM_TEXT(\d+)$',name).group(1)+'BEAM'+re.search(r'\d+$',name).group()
     boxes_local = block_text_bboxes(blocks[name])
     if not boxes_local:
         return None
@@ -334,11 +335,11 @@ def process_all(input_path, is_training_file=False):
     ins, blocks = load_all(input_path)
     obstacle_lines = build_obstacle_lines(blocks, ins)
     hatch_polys = get_hatch_polys(input_path)
-    REBAR_NAMES = set(n for n in blocks if re.match(r'FL\d+_(BEAMBAR|SLABBAR)\d+$', n))
+    REBAR_NAMES = set(n for n in blocks if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', n))
     STRICT_MODE = False  # scoped strict-mode is toggled True only around column_text /
                           # slab-marker below - the best-performing configuration found.
 
-    bt_names_all = sorted([n for n in blocks if re.match(r'FL\d+_BEAM_TEXT\d+$', n)],
+    bt_names_all = sorted([n for n in blocks if re.match(r'FL-?\d+_BEAM_TEXT\d+$', n)],
                            key=lambda n: int(re.search(r'\d+$', n).group()))
 
     insert_final = {}
@@ -444,11 +445,11 @@ def process_all(input_path, is_training_file=False):
     # === 4) COLUMN_TEXT: full 360 degree freedom - placed LAST so it can route around
     STRICT_MODE = True  # already global
     # everything else already fixed (beambar, slabbar, beam_text, hatch, structural lines) ===
-    names = sorted([n for n in blocks if re.match(r'FL\d+_COLUMN_TEXT\d+$', n)],
+    names = sorted([n for n in blocks if re.match(r'FL-?\d+_COLUMN_TEXT\d+$', n)],
                     key=lambda n: int(re.search(r'\d+$', n).group()))
     ok=0; tot=0
     for name in names:
-        own_col = re.match(r'(FL\d+_)COLUMN_TEXT(\d+)$',name).group(1)+'COLUMN'+re.search(r'\d+$',name).group()
+        own_col = re.match(r'(FL-?\d+_)COLUMN_TEXT(\d+)$',name).group(1)+'COLUMN'+re.search(r'\d+$',name).group()
         tot += 1
         res = radial_place_full(name, blocks, bar_obstacle_lines, hatch_polys, placed_boxes, (own_col,))
         if res is None:
@@ -465,7 +466,7 @@ def process_all(input_path, is_training_file=False):
     # Moves as ONE rigid group (validated earlier against real output), via INTERNAL MTEXT
     # edit only (the block also contains the slab_poly boundary which must never move).
     # Placed LAST too - full radial freedom, so it can route around everything else. ===
-    slab_marker_names = sorted([n for n in blocks if re.match(r'FL\d+_SLAB\d+$', n)],
+    slab_marker_names = sorted([n for n in blocks if re.match(r'FL-?\d+_SLAB\d+$', n)],
                                 key=lambda n: int(re.search(r'\d+$', n).group()))
     slab_polys = get_slab_polys(input_path)
     ok=0; tot=0
@@ -540,7 +541,7 @@ def process_all(input_path, is_training_file=False):
         confl = []
         for name in rebar_names_list:
             dx,dy = insert_final.get(name,(0,0))
-            if re.match(r'FL\d+_BEAMBAR',name) and dx<=-49: continue
+            if re.match(r'FL-?\d+_BEAMBAR',name) and dx<=-49: continue
             tdx,tdy = text_local_final.get(name,(0,0))
             bl = block_text_bboxes(blocks[name])
             if not bl: continue
@@ -549,7 +550,7 @@ def process_all(input_path, is_training_file=False):
                 for oname in rebar_names_list:
                     if oname==name: continue
                     odx,ody = insert_final.get(oname,(0,0))
-                    if re.match(r'FL\d+_BEAMBAR',oname) and odx<=-49: continue
+                    if re.match(r'FL-?\d+_BEAMBAR',oname) and odx<=-49: continue
                     olines,_ = block_lines_local(blocks[oname])
                     for x1,y1,x2,y2 in olines:
                         seg = (x1+odx,y1+ody,x2+odx,y2+ody)
@@ -646,6 +647,97 @@ def process_all(input_path, is_training_file=False):
         if not fixed_any:
             break
     print(f'REPAIR PASS: {len(find_conflicts())} rebar-vs-rebar conflicts remain')
+
+    # === AUTOMATIC CIRCLE REPAIR: find any slab-marker circle that still overlaps a
+    # rebar line (beambar/slabbar) after everything else has settled, and nudge that
+    # marker's circle+text a little to clear it - permanently automatic, never needs
+    # to be asked for. ===
+    def circle_conflicts():
+        out = []
+        for sname in slab_marker_names:
+            circle_bbox_local = None
+            for e in entities_from_pairs(blocks[sname]):
+                if e[0][1] == 'CIRCLE':
+                    d = to_dict(e)
+                    if d.get(8,[''])[0] == 'slab_center':
+                        cx = float(d[10][0]); cy = float(d[20][0]); rad = float(d[40][0])
+                        circle_bbox_local = (cx-rad, cy-rad, cx+rad, cy+rad)
+                        break
+            if not circle_bbox_local:
+                continue
+            tdx, tdy = text_local_final.get(sname, (0,0))
+            ccb = translate_bbox(circle_bbox_local, tdx, tdy)
+            for rname in REBAR_NAMES:
+                rdx, rdy = insert_final.get(rname, (0,0))
+                if re.match(r'FL-?\d+_BEAMBAR', rname) and rdx <= -49:
+                    continue
+                rlines,_ = block_lines_local(blocks[rname])
+                for x1,y1,x2,y2 in rlines:
+                    seg = (x1+rdx, y1+rdy, x2+rdx, y2+rdy)
+                    if seg_intersects_bbox(seg, ccb):
+                        out.append((sname, rname))
+                        break
+        return out
+
+    for _pass in range(3):
+        conflicts = circle_conflicts()
+        if not conflicts:
+            break
+        fixed_any = False
+        seen = set()
+        for sname, rname in conflicts:
+            if sname in seen:
+                continue
+            boxes_local = slab_marker_boxes(blocks[sname])
+            circle_bbox_local = None
+            for e in entities_from_pairs(blocks[sname]):
+                if e[0][1] == 'CIRCLE':
+                    d = to_dict(e)
+                    if d.get(8,[''])[0] == 'slab_center':
+                        cx = float(d[10][0]); cy = float(d[20][0]); rad = float(d[40][0])
+                        circle_bbox_local = (cx-rad, cy-rad, cx+rad, cy+rad)
+                        break
+            home_bb = union_bbox(boxes_local) if boxes_local else circle_bbox_local
+            if circle_bbox_local:
+                home_bb = (min(home_bb[0],circle_bbox_local[0]), min(home_bb[1],circle_bbox_local[1]),
+                           max(home_bb[2],circle_bbox_local[2]), max(home_bb[3],circle_bbox_local[3]))
+            cur_dx, cur_dy = text_local_final.get(sname, (0,0))
+            local_placed = [b for n2,b2 in [(n2,slab_marker_boxes(blocks[n2])) for n2 in slab_marker_names if n2!=sname]
+                             for x,y,w,h,rot in (b2 or []) for b in [text_bbox(x+text_local_final.get(n2,(0,0))[0], y+text_local_final.get(n2,(0,0))[1], w, h, rot)]]
+            found = None
+            r = 0.0
+            while r <= 1.0 and not found:
+                n_dirs = max(16, int(2*math.pi*r/0.05)) if r>0 else 1
+                for k in range(n_dirs):
+                    ang = 2*math.pi*k/n_dirs if r>0 else 0
+                    ddx, ddy = cur_dx + r*math.cos(ang), cur_dy + r*math.sin(ang)
+                    poly = slab_polys.get(sname)
+                    cand_bb = translate_bbox(home_bb, ddx-cur_dx, ddy-cur_dy)
+                    if poly:
+                        px1,py1,px2,py2 = poly
+                        if cand_bb[0]<px1 or cand_bb[1]<py1 or cand_bb[2]>px2 or cand_bb[3]>py2:
+                            continue
+                    if not is_ok_full(boxes_local, ddx, ddy, bar_obstacle_lines, hatch_polys, local_placed, (sname,)):
+                        continue
+                    if circle_bbox_local:
+                        ccb = translate_bbox(circle_bbox_local, ddx, ddy)
+                        clear = True
+                        for x1,y1,x2,y2,oname in bar_obstacle_lines:
+                            if seg_intersects_bbox((x1,y1,x2,y2), ccb):
+                                clear = False; break
+                        if not clear:
+                            continue
+                    found = (ddx, ddy)
+                    break
+                r += 0.05
+            if found:
+                text_local_final[sname] = found
+                fixed_any = True
+                seen.add(sname)
+        if not fixed_any:
+            break
+    remaining_circle = len(circle_conflicts())
+    print(f'CIRCLE REPAIR: {remaining_circle} slab-marker/rebar circle conflicts remain')
 
     return insert_final, text_local_final
 
