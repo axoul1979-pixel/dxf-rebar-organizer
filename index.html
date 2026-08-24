@@ -121,7 +121,7 @@
     </div>
 
     <div class="cmd">
-      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ</div>
+      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ · έκδ. A3-v4-safepy</div>
       <div id="log"></div>
     </div>
   </div>
@@ -1133,14 +1133,11 @@ const workerCode = `
       } else if (m.type === "run") {
         pyodide.FS.writeFile("input.dxf", new Uint8Array(m.buf));
         postMessage({type:"phase", i:1});
-        await pyodide.runPythonAsync(
-          'import sys\n' +
-          'sys.modules.pop("pipeline_v11", None)\n' +
-          'import pipeline_v11 as P\n');
+        await pyodide.runPythonAsync("import sys\nsys.modules.pop(\"pipeline_v11\", None)\nimport pipeline_v11 as P\n");
         postMessage({type:"phase", i:2});
-        await pyodide.runPythonAsync('P.tidy("input.dxf","output.dxf","offsets.pkl")');
+        await pyodide.runPythonAsync("P.tidy(\"input.dxf\",\"output.dxf\",\"offsets.pkl\")");
         postMessage({type:"phase", i:3});
-        await pyodide.runPythonAsync('print("--- ΑΝΕΞΑΡΤΗΤΟΣ ΕΛΕΓΧΟΣ ---")\nP.audit("output.dxf","input.dxf")');
+        await pyodide.runPythonAsync("print(\"--- ΑΝΕΞΑΡΤΗΤΟΣ ΕΛΕΓΧΟΣ ---\")\nP.audit(\"output.dxf\",\"input.dxf\")");
         const out = pyodide.FS.readFile("output.dxf");
         postMessage({type:"done", out: out.buffer}, [out.buffer]);
       }
