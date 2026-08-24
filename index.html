@@ -1103,7 +1103,8 @@ let dxfBuf = null, dxfName = null, workerReady = false, t0 = 0, tick = null;
 
 function phase(i, state) { const el = $("ph"+i); if (el) el.className = "ph " + state; }
 function busy(on, text) {
-  $("status").className = on ? "running" : "";
+  const st = document.getElementById("timer") && document.getElementById("timer").parentElement;
+  if (st) st.className = "tb-v" + (on ? " running" : "");
   if (text !== undefined) $("stext").innerHTML = text;
   if (on) { t0 = Date.now(); clearInterval(tick);
     tick = setInterval(() => { $("timer").textContent = ((Date.now()-t0)/1000).toFixed(0) + " s"; }, 500); }
