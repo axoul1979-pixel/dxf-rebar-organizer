@@ -78,6 +78,14 @@
         font:400 .78rem/1.55 'JetBrains Mono'; color:#b9d8c2; }
   #log::before{ content:"Command: _\A"; color:var(--dim); }
   footer{ max-width:1100px; margin:10px auto 0; color:var(--dim); font-size:.78rem; }
+  .timing-note{ max-width:1100px; margin:14px auto 0; padding:12px 16px; border:1px dashed var(--hair);
+                background:#1c1f2380; color:#c9b896; font-size:.85rem; text-align:center; letter-spacing:.02em; }
+  .timing-note b{ color:var(--y); }
+  .credit{ max-width:1100px; margin:16px auto 0; padding-top:14px; border-top:1px solid var(--hair);
+           display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap; }
+  .credit svg{ width:120px; height:auto; opacity:.9; }
+  .credit .txt{ font:600 .8rem 'Saira Condensed'; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); }
+  .credit .txt b{ color:var(--frame); font-weight:700; }
   @media (prefers-reduced-motion: reduce){ .spin{ animation:none; } }
 </style>
 </head>
@@ -121,12 +129,44 @@
     </div>
 
     <div class="cmd">
-      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ · έκδ. A3-v6-fixed</div>
+      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ · έκδ. A3-v8-dlfix</div>
       <div id="log"></div>
     </div>
   </div>
 </div>
-<footer>Όλα τρέχουν τοπικά στη συσκευή σου — το σχέδιο δεν ανεβαίνει πουθενά. Σε μεγάλα σχέδια η επεξεργασία θέλει λεπτά· όσο μετρά ο χρόνος στην πινακίδα, δουλεύει.</footer>
+<footer>Όλα τρέχουν τοπικά στη συσκευή σου — το σχέδιο δεν ανεβαίνει πουθενά.</footer>
+
+<div class="timing-note">
+  ⏱ Ο μέσος χρόνος παραγωγής τακτοποιημένου σχεδίου μίας στάθμης διαρκεί <b>μερικά λεπτά</b>.
+  <i>Keep calm and… wait.</i> Σε επόμενη έκδοση θα γίνει πιο γρήγορο.
+</div>
+
+<div class="credit">
+  <svg viewBox="0 0 240 78" xmlns="http://www.w3.org/2000/svg" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="8" y="46" width="22" height="30" rx="10" stroke="#7fa6c9" stroke-width="2.4"/>
+  <line x1="19" y1="46" x2="19" y2="58" stroke="#7fa6c9" stroke-width="2.4"/>
+  <circle cx="19" cy="52" r="1.6" fill="#7fa6c9" stroke="none"/>
+  <path d="M30,58 C50,58 46,40 68,40" stroke="#d96c2f" stroke-width="2.2"/>
+  <line x1="66" y1="76" x2="176" y2="76" stroke="#9aa3ad" stroke-width="1.6"/>
+  <path d="M66,76 L66,52 L78,52 L86,34 L94,52 L104,52 L104,44 L112,30 L120,44 L120,52 L132,52 L140,58 L148,40 L156,58 L164,52 L176,52 L176,76"
+        stroke="#7fa6c9" stroke-width="2.4"/>
+  <line x1="88" y1="60" x2="88" y2="68" stroke="#d96c2f" stroke-width="1.6"/>
+  <line x1="112" y1="60" x2="112" y2="68" stroke="#d96c2f" stroke-width="1.6"/>
+  <line x1="150" y1="62" x2="150" y2="68" stroke="#d96c2f" stroke-width="1.6"/>
+  <path d="M176,58 C194,58 190,52 202,52" stroke="#d96c2f" stroke-width="2.2"/>
+  <!-- χέρι: παλάμη + 4 δάχτυλα + αντίχειρας, κρατά μολύβι -->
+  <g stroke="#d96c2f" stroke-width="2.2">
+    <path d="M202,70 C198,70 196,66 197,62 L198,50 C198,48 201,48 201,50 L201,58"/>
+    <path d="M201,50 L201,44 C201,42 204,42 204,44 L204,58"/>
+    <path d="M204,45 L204,40 C204,38 207,38 207,40 L207,58"/>
+    <path d="M207,41 L207,37 C207,35 210,35 210,37 L210,52"/>
+    <path d="M197,62 C194,60 189,60 189,64 C189,68 193,70 197,70 L216,70 C222,70 224,66 222,60 L210,52"/>
+  </g>
+  <line x1="206" y1="43" x2="232" y2="24" stroke="#e8e6df" stroke-width="2.6"/>
+  <line x1="226" y1="28" x2="233" y2="21" stroke="#d96c2f" stroke-width="2.6"/>
+</svg>
+  <span class="txt">Developed / Powered by <b>AXOUL</b></span>
+</div>
 
 <script>
 const PIPELINE_B64 =
@@ -1137,6 +1177,7 @@ const workerCode = `
         await pyodide.runPythonAsync(_b64d("aW1wb3J0IHN5cwpzeXMubW9kdWxlcy5wb3AoInBpcGVsaW5lX3YxMSIsIE5vbmUpCmltcG9ydCBwaXBlbGluZV92MTEgYXMgUAo="));
         await pyodide.runPythonAsync(_b64d("UC50aWR5KCJpbnB1dC5keGYiLCJvdXRwdXQuZHhmIiwib2Zmc2V0cy5wa2wiKQ=="));
         await pyodide.runPythonAsync(_b64d("cHJpbnQoIi0tLSDOkc6dzpXOns6RzqHOpM6XzqTOn86jIM6VzpvOlc6TzqfOn86jIC0tLSIpClAuYXVkaXQoIm91dHB1dC5keGYiLCJpbnB1dC5keGYiKQ=="));
+        const out = pyodide.FS.readFile("output.dxf");
         postMessage({type:"done", out: out.buffer}, [out.buffer]);
       }
     } catch (e) {
