@@ -4,39 +4,94 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DXF Rebar Auto-Tidy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 780px; margin: 24px auto; padding: 0 16px; color:#222; }
-  h1 { font-size: 1.5rem; }
-  .card { border: 1px solid #ccc; border-radius: 10px; padding: 16px; margin: 14px 0; }
-  button { font-size: 1.05rem; padding: 10px 18px; border-radius: 8px; border: 1px solid #888; cursor: pointer; }
-  button:disabled { opacity: .45; cursor: default; }
-  #log { background:#111; color:#9fe89f; font-family: monospace; font-size: .85rem;
-         padding: 12px; border-radius: 8px; height: 260px; overflow-y: auto; white-space: pre-wrap; }
-  .ok { color:#0a7a0a; font-weight: 700; }
-  .bad { color:#b00020; font-weight: 700; }
-  #dl { display:none; }
-  .note { color:#666; font-size:.9rem; }
+  :root { --bg:#0d1117; --panel:#161b22; --line:#2b3340; --txt:#dbe2ea; --dim:#8b96a5;
+          --acc:#f0b429; --acc2:#39c5cf; --ok:#3fb950; --bad:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; color:var(--txt);
+         font-family:Inter,system-ui,sans-serif; background:
+         linear-gradient(rgba(57,197,207,.05) 1px, transparent 1px) 0 0/100% 28px,
+         linear-gradient(90deg, rgba(57,197,207,.05) 1px, transparent 1px) 0 0/28px 100%,
+         radial-gradient(1200px 600px at 70% -10%, #14324066, transparent), var(--bg); }
+  .wrap { max-width:860px; margin:0 auto; padding:28px 18px 60px; }
+  header h1 { font-size:1.7rem; font-weight:800; letter-spacing:.3px; margin:0; }
+  header h1 span { color:var(--acc); }
+  header p { color:var(--dim); margin:.4rem 0 0; font-size:.92rem; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+          padding:20px; margin-top:18px; box-shadow:0 8px 30px #0006; }
+  #drop { border:2px dashed #3a4656; border-radius:12px; padding:34px 16px; text-align:center;
+          cursor:pointer; transition:.15s; color:var(--dim); }
+  #drop.hover { border-color:var(--acc2); background:#39c5cf12; color:var(--txt); }
+  #drop.hasfile { border-color:var(--ok); color:var(--txt); }
+  #drop b { color:var(--acc2); }
+  #drop .big { font-size:2rem; display:block; margin-bottom:6px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:16px; }
+  button { font:600 1rem Inter,sans-serif; padding:12px 22px; border-radius:10px; border:0;
+           cursor:pointer; background:linear-gradient(180deg,#ffd167,var(--acc)); color:#1a1a1a; }
+  button:disabled { filter:grayscale(1) brightness(.6); cursor:default; }
+  a#dl button { background:linear-gradient(180deg,#57e389,var(--ok)); color:#04240d; }
+  #dl { display:none; text-decoration:none; }
+  .phases { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+  .ph { font-size:.8rem; padding:6px 12px; border-radius:999px; border:1px solid var(--line);
+        color:var(--dim); background:#0d1117; }
+  .ph.on { border-color:var(--acc2); color:var(--acc2); }
+  .ph.done { border-color:var(--ok); color:var(--ok); }
+  #status { margin-top:14px; display:flex; align-items:center; gap:10px; min-height:28px; }
+  .spin { width:18px; height:18px; border-radius:50%; border:3px solid #39c5cf33;
+          border-top-color:var(--acc2); animation:sp 1s linear infinite; display:none; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  .running .spin { display:inline-block; }
+  #stext { font-size:.95rem; }
+  #stext .ok { color:var(--ok); font-weight:700; }
+  #stext .bad { color:var(--bad); font-weight:700; }
+  #timer { color:var(--dim); font:600 .85rem 'JetBrains Mono',monospace; }
+  #log { background:#0a0d12; border:1px solid var(--line); color:#9fe89f;
+         font:400 .8rem/1.5 'JetBrains Mono',monospace; padding:14px; border-radius:10px;
+         height:280px; overflow-y:auto; white-space:pre-wrap; margin-top:10px; }
+  footer { color:var(--dim); font-size:.8rem; margin-top:16px; }
 </style>
 </head>
 <body>
-<h1>DXF Rebar Auto-Tidy — εκτέλεση στον browser</h1>
-<p class="note">Όλα τρέχουν τοπικά στη συσκευή σου (Pyodide). Το DXF δεν ανεβαίνει πουθενά.
-Μεγάλα σχέδια μπορεί να θέλουν αρκετά λεπτά και η σελίδα να φαίνεται «παγωμένη» — δούλευει.</p>
+<div class="wrap">
+<header>
+  <h1>DXF <span>Rebar</span> Auto-Tidy</h1>
+  <p>Αυτόματη τακτοποίηση κειμένων οπλισμού ξυλοτύπου — τρέχει εξ ολοκλήρου στη συσκευή σου, το σχέδιο δεν ανεβαίνει πουθενά.</p>
+</header>
 
 <div class="card">
-  <p><b>1.</b> Διάλεξε το DXF ξυλοτύπου (ASCII/R12, blocks FLn_*):</p>
-  <input type="file" id="file" accept=".dxf">
-  <p><b>2.</b> <button id="run" disabled>Εκτέλεση τακτοποίησης + ελέγχου</button></p>
-  <p id="status">Φόρτωση Python στον browser…</p>
-  <p><a id="dl"><button>Κατέβασμα τακτοποιημένου DXF</button></a></p>
+  <div id="drop">
+    <span class="big">📐</span>
+    <b>Σύρε εδώ το DXF</b> ή πάτησε για επιλογή αρχείου
+    <div id="finfo" style="margin-top:8px;font-size:.85rem;"></div>
+  </div>
+  <input type="file" id="file" accept=".dxf" hidden>
+
+  <div class="phases">
+    <span class="ph" id="ph0">1 · Περιβάλλον Python</span>
+    <span class="ph" id="ph1">2 · Ανάγνωση σχεδίου</span>
+    <span class="ph" id="ph2">3 · Τακτοποίηση</span>
+    <span class="ph" id="ph3">4 · Ανεξάρτητος έλεγχος</span>
+  </div>
+
+  <div class="row">
+    <button id="run" disabled>Εκτέλεση</button>
+    <a id="dl"><button>⬇ Κατέβασμα τακτοποιημένου DXF</button></a>
+    <span id="timer"></span>
+  </div>
+
+  <div id="status"><span class="spin"></span><span id="stext">Φόρτωση περιβάλλοντος Python…</span></div>
 </div>
 
 <div class="card">
-  <b>Log</b>
+  <b style="font-size:.9rem;color:var(--dim)">ΖΩΝΤΑΝΟ LOG</b>
   <div id="log"></div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<footer>Σε μεγάλα σχέδια η επεξεργασία στον browser μπορεί να πάρει αρκετά λεπτά — όσο τρέχει το χρονόμετρο και το log, δουλεύει.</footer>
+</div>
+
 <script>
 const PIPELINE_B64 =
   "IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwojIC0qLSBjb2Rpbmc6IHV0Zi04IC0qLQoiIiJwaXBlbGluZV92MTEgLSDOkc6lzqTOn86dzp/OnM6XIM6tzrrOtM6/" +
@@ -1008,72 +1063,109 @@ const PIPELINE_B64 =
 
 const $ = id => document.getElementById(id);
 const log = s => { $("log").textContent += s + "\n"; $("log").scrollTop = 1e9; };
-let pyodide = null, inputName = null;
+let dxfBuf = null, dxfName = null, workerReady = false, t0 = 0, tick = null;
 
-async function init() {
-  try {
-    pyodide = await loadPyodide();
-    pyodide.setStdout({ batched: s => log(s) });
-    pyodide.setStderr({ batched: s => log(s) });
-    // Το pipeline είναι ΕΝΣΩΜΑΤΩΜΕΝΟ σε αυτό το αρχείο (base64) -
-    // η εφαρμογή δεν εξαρτάται από κανένα άλλο αρχείο του repo.
-    const bin = Uint8Array.from(atob(PIPELINE_B64), c => c.charCodeAt(0));
-    pyodide.FS.writeFile("pipeline_v11.py", bin);
-    $("status").textContent = "Έτοιμο. Διάλεξε αρχείο.";
-    maybeEnable();
-  } catch (e) {
-    $("status").innerHTML = '<span class="bad">Σφάλμα φόρτωσης: ' + e + '</span>';
-    log("" + e);
-  }
+function phase(i, state) { const el = $("ph"+i); if (el) el.className = "ph " + state; }
+function busy(on, text) {
+  $("status").className = on ? "running" : "";
+  if (text !== undefined) $("stext").innerHTML = text;
+  if (on) { t0 = Date.now(); clearInterval(tick);
+    tick = setInterval(() => { $("timer").textContent = ((Date.now()-t0)/1000).toFixed(0) + " s"; }, 500); }
+  else clearInterval(tick);
 }
 
-function maybeEnable() { $("run").disabled = !(pyodide && inputName); }
+const workerCode = `
+  importScripts("https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js");
+  let pyodide = null;
+  self.onmessage = async ev => {
+    const m = ev.data;
+    try {
+      if (m.type === "init") {
+        pyodide = await loadPyodide();
+        pyodide.setStdout({ batched: s => postMessage({type:"log", s}) });
+        pyodide.setStderr({ batched: s => postMessage({type:"log", s}) });
+        const bin = Uint8Array.from(atob(m.b64), c => c.charCodeAt(0));
+        pyodide.FS.writeFile("pipeline_v11.py", bin);
+        postMessage({type:"ready"});
+      } else if (m.type === "run") {
+        pyodide.FS.writeFile("input.dxf", new Uint8Array(m.buf));
+        postMessage({type:"phase", i:1});
+        await pyodide.runPythonAsync(
+          'import sys\n' +
+          'sys.modules.pop("pipeline_v11", None)\n' +
+          'import pipeline_v11 as P\n');
+        postMessage({type:"phase", i:2});
+        await pyodide.runPythonAsync('P.tidy("input.dxf","output.dxf","offsets.pkl")');
+        postMessage({type:"phase", i:3});
+        await pyodide.runPythonAsync('print("--- ΑΝΕΞΑΡΤΗΤΟΣ ΕΛΕΓΧΟΣ ---")\nP.audit("output.dxf","input.dxf")');
+        const out = pyodide.FS.readFile("output.dxf");
+        postMessage({type:"done", out: out.buffer}, [out.buffer]);
+      }
+    } catch (e) {
+      postMessage({type:"error", s: String(e)});
+    }
+  };
+`;
+const worker = new Worker(URL.createObjectURL(new Blob([workerCode], {type:"application/javascript"})));
+let sawZero = false;
 
-$("file").addEventListener("change", async ev => {
-  const f = ev.target.files[0];
-  if (!f) return;
-  const buf = new Uint8Array(await f.arrayBuffer());
-  pyodide.FS.writeFile("input.dxf", buf);
-  inputName = f.name;
-  $("status").textContent = "Αρχείο: " + f.name + " (" + (buf.length/1024).toFixed(0) + " KB). Πάτα Εκτέλεση.";
-  $("dl").style.display = "none";
-  maybeEnable();
-});
-
-$("run").addEventListener("click", async () => {
-  $("run").disabled = true;
-  $("dl").style.display = "none";
-  $("status").textContent = "Τρέχει… (μην κλείσεις τη σελίδα)";
-  log("=== ΕΚΤΕΛΕΣΗ: " + inputName + " ===");
-  await new Promise(r => setTimeout(r, 50));   // να προλάβει να ζωγραφιστεί το UI
-  try {
-    await pyodide.runPythonAsync(`
-import importlib, sys
-if "pipeline_v11" in sys.modules:
-    del sys.modules["pipeline_v11"]
-import pipeline_v11 as P
-P.tidy("input.dxf", "output.dxf", "offsets.pkl")
-print("--- ΑΝΕΞΑΡΤΗΤΟΣ ΕΛΕΓΧΟΣ ---")
-P.audit("output.dxf", "input.dxf")
-`);
-    const out = pyodide.FS.readFile("output.dxf");
-    const blob = new Blob([out], { type: "application/dxf" });
+worker.onmessage = ev => {
+  const m = ev.data;
+  if (m.type === "log") { log(m.s); if (m.s.includes("AUDIT_TOTAL 0")) sawZero = true; }
+  else if (m.type === "ready") {
+    workerReady = true; phase(0, "done");
+    busy(false, "Έτοιμο. " + (dxfBuf ? "Πάτησε Εκτέλεση." : "Διάλεξε αρχείο DXF."));
+    maybeEnable();
+  }
+  else if (m.type === "phase") { phase(m.i-1, "done"); phase(m.i, "on"); 
+    busy(true, ["","Ανάγνωση σχεδίου…","Τακτοποίηση κειμένων… (τα μεγάλα σχέδια θέλουν λεπτά)","Ανεξάρτητος έλεγχος…"][m.i]); }
+  else if (m.type === "done") {
+    phase(3, "done");
+    const blob = new Blob([m.out], {type:"application/dxf"});
     const a = $("dl");
     a.href = URL.createObjectURL(blob);
-    a.download = inputName.replace(/\.dxf$/i, "") + "_tidied.dxf";
+    a.download = dxfName.replace(/\.dxf$/i,"") + "_tidied.dxf";
     a.style.display = "inline-block";
-    const okZero = $("log").textContent.includes("AUDIT_TOTAL 0");
-    $("status").innerHTML = okZero
-      ? '<span class="ok">Ολοκληρώθηκε — AUDIT_TOTAL 0. Κατέβασε το αρχείο.</span>'
-      : '<span class="bad">Ολοκληρώθηκε αλλά το audit ΔΕΝ είναι 0 — δες το log.</span>';
-  } catch (e) {
-    $("status").innerHTML = '<span class="bad">Σφάλμα εκτέλεσης — δες το log.</span>';
-    log("" + e);
+    busy(false, sawZero ? '<span class="ok">Ολοκληρώθηκε — AUDIT_TOTAL 0 ✓ Κατέβασε το αρχείο.</span>'
+                        : '<span class="bad">Ολοκληρώθηκε, αλλά το audit ΔΕΝ είναι 0 — δες το log.</span>');
+    $("run").disabled = false;
   }
-  $("run").disabled = false;
-});
+  else if (m.type === "error") {
+    busy(false, '<span class="bad">Σφάλμα — δες το log.</span>');
+    log(m.s); $("run").disabled = false;
+  }
+};
 
-init();
+busy(true, "Φόρτωση περιβάλλοντος Python… (10-30 δευτερόλεπτα την πρώτη φορά)");
+phase(0, "on");
+worker.postMessage({type:"init", b64: PIPELINE_B64});
+
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+["dragover","dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("hover"); }));
+["dragleave","drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("hover"); }));
+drop.addEventListener("drop", ev => { const f = ev.dataTransfer.files[0]; if (f) takeFile(f); });
+$("file").addEventListener("change", ev => { const f = ev.target.files[0]; if (f) takeFile(f); });
+
+async function takeFile(f) {
+  dxfBuf = await f.arrayBuffer();
+  dxfName = f.name;
+  drop.classList.add("hasfile");
+  $("finfo").textContent = "✔ " + f.name + " — " + (dxfBuf.byteLength/1024).toFixed(0) + " KB";
+  $("dl").style.display = "none";
+  if (workerReady) busy(false, "Έτοιμο. Πάτησε Εκτέλεση.");
+  maybeEnable();
+}
+function maybeEnable() { $("run").disabled = !(workerReady && dxfBuf); }
+
+$("run").addEventListener("click", () => {
+  $("run").disabled = true; sawZero = false;
+  $("dl").style.display = "none";
+  phase(1,"on"); phase(2,""); phase(3,"");
+  log("=== ΕΚΤΕΛΕΣΗ: " + dxfName + " ===");
+  const copy = dxfBuf.slice(0);
+  worker.postMessage({type:"run", buf: copy}, [copy]);
+});
 </script>
 </body>
 </html>
