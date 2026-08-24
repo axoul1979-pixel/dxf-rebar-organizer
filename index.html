@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DXF Rebar Auto-Tidy</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 780px; margin: 24px auto; padding: 0 16px; color:#222; }
+  h1 { font-size: 1.5rem; }
+  .card { border: 1px solid #ccc; border-radius: 10px; padding: 16px; margin: 14px 0; }
+  button { font-size: 1.05rem; padding: 10px 18px; border-radius: 8px; border: 1px solid #888; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  #log { background:#111; color:#9fe89f; font-family: monospace; font-size: .85rem;
+         padding: 12px; border-radius: 8px; height: 260px; overflow-y: auto; white-space: pre-wrap; }
+  .ok { color:#0a7a0a; font-weight: 700; }
+  .bad { color:#b00020; font-weight: 700; }
+  #dl { display:none; }
+  .note { color:#666; font-size:.9rem; }
+</style>
+</head>
+<body>
+<h1>DXF Rebar Auto-Tidy — εκτέλεση στον browser</h1>
+<p class="note">Όλα τρέχουν τοπικά στη συσκευή σου (Pyodide). Το DXF δεν ανεβαίνει πουθενά.
+Μεγάλα σχέδια μπορεί να θέλουν αρκετά λεπτά και η σελίδα να φαίνεται «παγωμένη» — δούλευει.</p>
+
+<div class="card">
+  <p><b>1.</b> Διάλεξε το DXF ξυλοτύπου (ASCII/R12, blocks FLn_*):</p>
+  <input type="file" id="file" accept=".dxf">
+  <p><b>2.</b> <button id="run" disabled>Εκτέλεση τακτοποίησης + ελέγχου</button></p>
+  <p id="status">Φόρτωση Python στον browser…</p>
+  <p><a id="dl"><button>Κατέβασμα τακτοποιημένου DXF</button></a></p>
+</div>
+
+<div class="card">
+  <b>Log</b>
+  <div id="log"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const log = s => { $("log").textContent += s + "\n"; $("log").scrollTop = 1e9; };
+let pyodide = null, inputName = null;
+
+async function init() {
+  try {
+    pyodide = await loadPyodide();
+    pyodide.setStdout({ batched: s => log(s) });
+    pyodide.setStderr({ batched: s => log(s) });
+    const r = await fetch("standalone/pipeline_v11.py");
+    if (!r.ok) throw new Error("Δεν βρέθηκε το standalone/pipeline_v11.py στο repo (" + r.status + ")");
+    pyodide.FS.writeFile("pipeline_v11.py", await r.text());
+    $("status").textContent = "Έτοιμο. Διάλεξε αρχείο.";
+    maybeEnable();
+  } catch (e) {
+    $("status").innerHTML = '<span class="bad">Σφάλμα φόρτωσης: ' + e + '</span>';
+    log("" + e);
+  }
+}
+
+function maybeEnable() { $("run").disabled = !(pyodide && inputName); }
+
+$("file").addEventListener("change", async ev => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const buf = new Uint8Array(await f.arrayBuffer());
+  pyodide.FS.writeFile("input.dxf", buf);
+  inputName = f.name;
+  $("status").textContent = "Αρχείο: " + f.name + " (" + (buf.length/1024).toFixed(0) + " KB). Πάτα Εκτέλεση.";
+  $("dl").style.display = "none";
+  maybeEnable();
+});
+
+$("run").addEventListener("click", async () => {
+  $("run").disabled = true;
+  $("dl").style.display = "none";
+  $("status").textContent = "Τρέχει… (μην κλείσεις τη σελίδα)";
+  log("=== ΕΚΤΕΛΕΣΗ: " + inputName + " ===");
+  await new Promise(r => setTimeout(r, 50));   // να προλάβει να ζωγραφιστεί το UI
+  try {
+    await pyodide.runPythonAsync(`
+import importlib, sys
+if "pipeline_v11" in sys.modules:
+    del sys.modules["pipeline_v11"]
+import pipeline_v11 as P
+P.tidy("input.dxf", "output.dxf", "offsets.pkl")
+print("--- ΑΝΕΞΑΡΤΗΤΟΣ ΕΛΕΓΧΟΣ ---")
+P.audit("output.dxf", "input.dxf")
+`);
+    const out = pyodide.FS.readFile("output.dxf");
+    const blob = new Blob([out], { type: "application/dxf" });
+    const a = $("dl");
+    a.href = URL.createObjectURL(blob);
+    a.download = inputName.replace(/\.dxf$/i, "") + "_tidied.dxf";
+    a.style.display = "inline-block";
+    const okZero = $("log").textContent.includes("AUDIT_TOTAL 0");
+    $("status").innerHTML = okZero
+      ? '<span class="ok">Ολοκληρώθηκε — AUDIT_TOTAL 0. Κατέβασε το αρχείο.</span>'
+      : '<span class="bad">Ολοκληρώθηκε αλλά το audit ΔΕΝ είναι 0 — δες το log.</span>';
+  } catch (e) {
+    $("status").innerHTML = '<span class="bad">Σφάλμα εκτέλεσης — δες το log.</span>';
+    log("" + e);
+  }
+  $("run").disabled = false;
+});
+
+init();
+</script>
+</body>
+</html>
