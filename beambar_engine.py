@@ -18,15 +18,16 @@ def get_inserts(path):
 
 def char_width_factor(ch):
     # rough relative widths (relative to text height). Calibrated up ~1.35x from initial
-    # estimate after confirming against real rendered text in AutoCAD - the original factors
-    # were systematically too narrow.
+    # estimate, and ξανά +12% (22/8/2026) όταν σε πραγματικό έλεγχο βρέθηκε κείμενο
+    # "1Φ12" να ΠΑΤΑΕΙ πάνω σε γειτονική γραμμή ενώ το μοντέλο έδειχνε μηδενικό αλλά
+    # μη αρνητικό κενό - τα πλάτη ήταν ακόμη συστηματικά στενά.
     if ch in ' .,\'':
-        return 0.34
+        return 0.38
     if ch in 'iIl|':
-        return 0.40
+        return 0.45
     if ch.isupper() or ch.isdigit():
-        return 0.84
-    return 0.74
+        return 0.94
+    return 0.83
 
 def strip_mtext_formatting(raw):
     def repl(m):
@@ -39,7 +40,9 @@ def strip_mtext_formatting(raw):
 def text_width(content, height):
     s = strip_mtext_formatting(content)
     w = sum(char_width_factor(ch) for ch in s) * height
-    return max(w, height*0.5)
+    # + μικρό περιθώριο άκρου: η αβεβαιότητα της εκτίμησης χτυπά στο ΤΕΛΟΣ της
+    # γραμμής, εκεί δηλαδή που κολλάει το επόμενο κείμενο
+    return max(w, height*0.5) + 0.25*height
 
 class Block:
     def __init__(self, name, ents):
@@ -95,17 +98,27 @@ def bbox_overlap(a,b, pad=0.0):
     return not (ax2+pad < bx1 or bx2+pad < ax1 or ay2+pad < by1 or by2+pad < ay1)
 
 def seg_intersects_bbox(seg, bbox):
+    """ΑΚΡΙΒΗΣ έλεγχος τομής ευθύγραμμου τμήματος με ορθογώνιο (Liang-Barsky).
+    Η παλιά υλοποίηση δειγμάτιζε 20 σημεία πάνω στο τμήμα: σε λεπτές ζώνες
+    κειμένου και σε συνευθειακές/παράλληλες γραμμές η τομή άλλοτε πιανόταν και
+    άλλοτε όχι, ανάλογα με το πού τύχαιναν τα δείγματα - έτσι κείμενο κάθισε
+    ΠΑΝΩ σε γραμμή ορίου πλακών ενώ όλοι οι έλεγχοι έδειχναν καθαρά."""
     x1,y1,x2,y2 = seg
     bx1,by1,bx2,by2 = bbox
-    # quick reject
     if max(x1,x2) < bx1 or min(x1,x2) > bx2 or max(y1,y2) < by1 or min(y1,y2) > by2:
         return False
-    # sample points along segment (cheap robust check for near-axis-aligned bar lines)
-    n = 20
-    for i in range(n+1):
-        t = i/n
-        px = x1+(x2-x1)*t
-        py = y1+(y2-y1)*t
-        if bx1<=px<=bx2 and by1<=py<=by2:
-            return True
-    return False
+    dx, dy = x2-x1, y2-y1
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, x1-bx1), (dx, bx2-x1), (-dy, y1-by1), (dy, by2-y1)):
+        if abs(p) < 1e-12:
+            if q < 0:
+                return False
+            continue
+        r = q / p
+        if p < 0:
+            if r > t1: return False
+            if r > t0: t0 = r
+        else:
+            if r < t0: return False
+            if r < t1: t1 = r
+    return True

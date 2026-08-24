@@ -1,4 +1,8 @@
 from pipeline_v11 import *
+import pipeline_v11 as _P   # για ΖΩΝΤΑΝΗ πρόσβαση στο FOOTPRINT/COLUMN_OUTWARD που
+                             # γεμίζουν μέσα στο process_all (το import * θα έπαιρνε
+                             # στιγμιότυπο των αρχικών, άδειων τιμών)
+from perimeter import bbox_outside
 from analyze import entities_from_pairs, to_dict
 import pickle, re, math
 
@@ -88,12 +92,45 @@ def try_move_text_only(name, blocks, insert_final, text_local_final, obstacle_li
         own_col = own_of(name)
         bl = block_text_bboxes(blocks[name])
         home_bb = union_bbox(bl)
+        outward = _P.COLUMN_OUTWARD.get(name)
+        fp = _P.FOOTPRINT
+        # ίδιο seeding με το κύριο πέρασμα: κέντρο αναζήτησης = η ΠΡΑΓΜΑΤΙΚΗ κολώνα,
+        # όχι το τοπικό μηδέν του κειμένου (που μπορεί να απέχει μέτρα)
+        sdx, sdy = 0.0, 0.0
+        col_lines,_ = block_lines_local(blocks[own_col]) if own_col in blocks else ([],None)
+        if col_lines and bl:
+            cxs=[p[0] for l in col_lines for p in [(l[0],l[1]),(l[2],l[3])]]
+            cys=[p[1] for l in col_lines for p in [(l[0],l[1]),(l[2],l[3])]]
+            sdx = (min(cxs)+max(cxs))/2 - (home_bb[0]+home_bb[2])/2
+            sdy = (min(cys)+max(cys))/2 - (home_bb[1]+home_bb[3])/2
+        # Ίδια λογική κόστους με το κύριο πέρασμα: αν η κολώνα είναι περιμετρική,
+        # η επιδιόρθωση δεν επιτρέπεται να ξανατραβήξει το κείμενο προς τα μέσα.
+        if _P.PERIM_OUTWARD and outward is not None:
+            for require_outside in (True, False):
+                if require_outside and fp is None:
+                    continue
+                c=0.0
+                while c<=_P.PERIM_MAX_COST:
+                    n_dirs=max(8,int(c/0.1)) if c>0 else 1
+                    for k in range(n_dirs):
+                        ang=2*math.pi*k/n_dirs if c>0 else 0
+                        ux,uy=math.cos(ang),math.sin(ang)
+                        f=1.0+_P.PERIM_DIR_WEIGHT*(1.0-(ux*outward[0]+uy*outward[1]))/2.0
+                        r=c/f
+                        if r>_P.PERIM_HARD_MAX_R:
+                            continue
+                        ddx,ddy=sdx+r*ux,sdy+r*uy
+                        if require_outside and not bbox_outside(fp, full_bbox(bl,ddx,ddy)):
+                            continue
+                        if is_ok_full(bl,ddx,ddy,obstacle_lines,hatch_polys,placed_boxes,(own_col,)):
+                            return ('insert', ddx,ddy)
+                    c+=0.1
         r=0.0
         while r<=4.0:
             n_dirs=max(8,int(r/0.1)) if r>0 else 1
             for k in range(n_dirs):
                 ang=2*math.pi*k/n_dirs if r>0 else 0
-                ddx,ddy=r*math.cos(ang),r*math.sin(ang)
+                ddx,ddy=sdx+r*math.cos(ang),sdy+r*math.sin(ang)
                 if is_ok_full(bl,ddx,ddy,obstacle_lines,hatch_polys,placed_boxes,(own_col,)):
                     return ('insert', ddx,ddy)
             r+=0.1

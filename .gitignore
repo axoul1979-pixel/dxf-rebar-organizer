@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pkl
+*_tidied.dxf
+_s*.dxf
+stage*.dxf
