@@ -96,6 +96,7 @@
           <h2>Ρίξε εδώ το DXF</h2>
           <p>ή πάτησε για επιλογή αρχείου · ξυλότυπος ASCII (blocks FLn_*)</p>
           <div class="fname" id="finfo"></div>
+          <button type="button" id="pick" style="width:auto;margin-top:14px;padding:10px 20px;background:transparent;border:1.5px solid var(--y);color:var(--y);">Επιλογή αρχείου…</button>
         </div>
       </div>
     </div>
@@ -1174,7 +1175,7 @@ worker.onmessage = ev => {
     a.style.display = "inline-block";
     $("audit").className = sawZero ? "ok" : "bad";
     $("audit").textContent = sawZero ? "AUDIT_TOTAL 0 ✓" : "ΔΕΝ ΕΙΝΑΙ 0 — δες log";
-    busy(false, sawZero ? '<span class="ok">Ολοκληρώθηκε — AUDIT_TOTAL 0 ✓ Κατέβασε το αρχείο.</span>'
+    busy(false, sawZero ? '<span class="ok">AUDIT_TOTAL 0 ✓ Κατέβασε το αρχείο και άνοιξέ το με το CAD σου — στον browser τα DXF φαίνονται ως κείμενο.</span>'
                         : '<span class="bad">Ολοκληρώθηκε, αλλά το audit ΔΕΝ είναι 0 — δες το log.</span>');
     $("run").disabled = false;
   }
@@ -1190,6 +1191,7 @@ worker.postMessage({type:"init", b64: PIPELINE_B64});
 
 const drop = $("drop");
 drop.addEventListener("click", () => $("file").click());
+$("pick").addEventListener("click", ev => { ev.stopPropagation(); $("file").click(); });
 ["dragover","dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("hover"); }));
 ["dragleave","drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("hover"); }));
 drop.addEventListener("drop", ev => { const f = ev.dataTransfer.files[0]; if (f) takeFile(f); });
