@@ -174,3 +174,13 @@ at.audit("output.dxf", "input.dxf")
 Python 3.10+. Καμία εξωτερική βιβλιοθήκη. Είσοδος: DXF ASCII (R12) με blocks
 ονοματολογίας `FLn_COLUMNk / FLn_COLUMN_TEXTk / FLn_BEAMk / FLn_BEAM_TEXTk /
 FLn_BEAMBARk / FLn_SLABk / FLn_SLABBARk / FLn_FREENODEk`.
+
+## Web εφαρμογή (GitHub Pages)
+
+Το repo περιέχει `index.html`: ενεργοποίησε GitHub Pages (Settings -> Pages ->
+Deploy from a branch -> main, / root) και η διεύθυνση του Pages γίνεται
+εφαρμογή που τρέχει το pipeline ΜΕΣΑ στον browser (Pyodide): επιλογή DXF ->
+Εκτέλεση -> ζωντανό log -> αυτόματο audit (πράσινο μόνο με AUDIT_TOTAL 0) ->
+κατέβασμα τακτοποιημένου DXF. Όλα τρέχουν τοπικά στη συσκευή σου - το σχέδιο
+δεν ανεβαίνει πουθενά. Στα μεγάλα σχέδια ο browser αργεί πολλαπλάσια από
+κανονική Python.
