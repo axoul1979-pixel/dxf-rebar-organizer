@@ -121,7 +121,7 @@
     </div>
 
     <div class="cmd">
-      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ · έκδ. A3-v5-base64</div>
+      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ · έκδ. A3-v6-fixed</div>
       <div id="log"></div>
     </div>
   </div>
@@ -1134,11 +1134,8 @@ const workerCode = `
       } else if (m.type === "run") {
         pyodide.FS.writeFile("input.dxf", new Uint8Array(m.buf));
         postMessage({type:"phase", i:1});
-        await pyodide.runPythonAsync("import sys\nsys.modules.pop(\"pipeline_v11\", None)\nimport pipeline_v11 as P\n");
         await pyodide.runPythonAsync(_b64d("aW1wb3J0IHN5cwpzeXMubW9kdWxlcy5wb3AoInBpcGVsaW5lX3YxMSIsIE5vbmUpCmltcG9ydCBwaXBlbGluZV92MTEgYXMgUAo="));
-        await pyodide.runPythonAsync("P.tidy(\"input.dxf\",\"output.dxf\",\"offsets.pkl\")");
         await pyodide.runPythonAsync(_b64d("UC50aWR5KCJpbnB1dC5keGYiLCJvdXRwdXQuZHhmIiwib2Zmc2V0cy5wa2wiKQ=="));
-        await pyodide.runPythonAsync("print(\"--- ΑΝΕΞΑΡΤΗΤΟΣ ΕΛΕΓΧΟΣ ---\")\nP.audit(\"output.dxf\",\"input.dxf\")");
         await pyodide.runPythonAsync(_b64d("cHJpbnQoIi0tLSDOkc6dzpXOns6RzqHOpM6XzqTOn86jIM6VzpvOlc6TzqfOn86jIC0tLSIpClAuYXVkaXQoIm91dHB1dC5keGYiLCJpbnB1dC5keGYiKQ=="));
         postMessage({type:"done", out: out.buffer}, [out.buffer]);
       }
