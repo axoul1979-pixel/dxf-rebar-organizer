@@ -128,6 +128,28 @@ python verify_all.py ΕΙΣΟΔΟΣ.dxf offsets.pkl
   (τύπου K82/K83): οι θέσεις είναι καθαρές και κοντά, αλλά η πλευρά επιλέγεται
   από τη διαθεσιμότητα, όχι από αισθητική προτίμηση πλευράς.
 
+## Φάκελος standalone/ (Pyodide / browser / online runners)
+
+- `standalone/pipeline_v11.py` — drop-in αντικατάσταση του pipeline_v11.py με
+  ΟΛΑ τα modules ενσωματωμένα: για περιβάλλοντα που φορτώνουν μόνο αυτό το
+  όνομα αρχείου (π.χ. web σελίδα με Pyodide). Ίδιο API + `tidy/audit/verify`.
+- `standalone/autotidy_all_in_one.py` — ίδιο περιεχόμενο με ουδέτερο όνομα.
+
+Και τα δύο παράγουν byte-προς-byte το ίδιο αποτέλεσμα με το κανονικό πακέτο
+(επαληθευμένο με md5).
+
+## Φάκελος standalone/ (Pyodide / browser / online runners)
+
+Δύο αυτόνομα αρχεία, το καθένα με ΟΛΟ το πακέτο ενσωματωμένο - δεν χρειάζονται
+τίποτα άλλο από το DXF σου:
+
+- `standalone/pipeline_v11.py` - drop-in αντικατάσταση με το ΙΔΙΟ όνομα, για
+  περιβάλλοντα που κάνουν `import pipeline_v11` (ίδιο API + `tidy/audit/verify`).
+- `standalone/autotidy_all_in_one.py` - ίδιο περιεχόμενο με ουδέτερο όνομα.
+
+Και τα δύο παράγουν byte-προς-byte το ίδιο αποτέλεσμα με το κανονικό πακέτο
+(ελεγμένο με md5).
+
 ## Μονοαρχειακή έκδοση (Pyodide / browser / online runners)
 
 Το `autotidy_all_in_one.py` περιέχει ΟΛΟ το πακέτο σε ένα αρχείο (ενσωματωμένα
