@@ -128,6 +128,25 @@ python verify_all.py ΕΙΣΟΔΟΣ.dxf offsets.pkl
   (τύπου K82/K83): οι θέσεις είναι καθαρές και κοντά, αλλά η πλευρά επιλέγεται
   από τη διαθεσιμότητα, όχι από αισθητική προτίμηση πλευράς.
 
+## Μονοαρχειακή έκδοση (Pyodide / browser / online runners)
+
+Το `autotidy_all_in_one.py` περιέχει ΟΛΟ το πακέτο σε ένα αρχείο (ενσωματωμένα
+modules). Δεν χρειάζεται τίποτα άλλο εκτός από το DXF σου:
+
+```bash
+python autotidy_all_in_one.py tidy   input.dxf output.dxf offsets.pkl
+python autotidy_all_in_one.py audit  output.dxf input.dxf
+python autotidy_all_in_one.py verify input.dxf offsets.pkl
+```
+
+Σε Pyodide/notebook:
+```python
+import autotidy_all_in_one as at
+at.tidy("input.dxf", "output.dxf", "offsets.pkl")
+at.audit("output.dxf", "input.dxf")
+```
+Παράγει byte-προς-byte το ίδιο αποτέλεσμα με το κανονικό πακέτο (ελεγμένο με md5).
+
 ## Απαιτήσεις
 
 Python 3.10+. Καμία εξωτερική βιβλιοθήκη. Είσοδος: DXF ASCII (R12) με blocks
