@@ -81,6 +81,10 @@
   .timing-note{ max-width:1100px; margin:14px auto 0; padding:12px 16px; border:1px dashed var(--hair);
                 background:#1c1f2380; color:#c9b896; font-size:.85rem; text-align:center; letter-spacing:.02em; }
   .timing-note b{ color:var(--y); }
+  .warn-note{ max-width:1100px; margin:0 auto 14px; padding:12px 16px; border:1.5px solid #b5451f;
+              background:#3a1f1180; color:#f0c9a8; font-size:.9rem; text-align:center; letter-spacing:.01em;
+              border-radius:6px; }
+  .warn-note b{ color:#ff8a4c; }
   .credit{ max-width:1100px; margin:16px auto 0; padding-top:14px; border-top:1px solid var(--hair);
            display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap; }
   .credit svg{ width:120px; height:auto; opacity:.9; }
@@ -93,6 +97,11 @@
 <div class="sheet">
   <span class="tick tl"></span><span class="tick tr"></span><span class="tick bl"></span><span class="tick br"></span>
   <div class="grid">
+
+    <div class="warn-note" style="grid-column:1/-1;">
+      ⚠ <b>Προσοχή!</b> Τα DXF που εξάγεις από το FESPA πρέπει να είναι με Layers
+      <b>«Με χρώματα»</b> — <u>όχι</u> με Layers <b>«Με πένες»</b>.
+    </div>
 
     <div class="field" id="drop">
       <span class="rebar" style="top:14px;left:16px">Φ10/20 Ανω</span>
@@ -129,7 +138,7 @@
     </div>
 
     <div class="cmd">
-      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ · έκδ. A3-v8-dlfix</div>
+      <div class="bar-t">ΓΡΑΜΜΗ ΕΝΤΟΛΩΝ — ΖΩΝΤΑΝΟ ΗΜΕΡΟΛΟΓΙΟ · έκδ. A3-v9-fespa</div>
       <div id="log"></div>
     </div>
   </div>
