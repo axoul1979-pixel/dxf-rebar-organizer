@@ -123,4 +123,47 @@ if len(sys.argv)>2:
         if abs(ddx) > 0.35+1e-6 or abs(ddy) > 0.35+1e-6:
             eviol.append((n_, round(ddx,2), round(ddy,2)))
 print('Ε) Ράβδοι πλακών εκτός ±0.35 από τη φυσική θέση:', len(eviol), eviol[:6])
-print('AUDIT_TOTAL', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol))
+# ΣΤ) Δείκτες πλακών (κείμενα+κύκλος): εντός της πλάκας τους στους υγιείς
+# άξονες, και ±0.35 από τη ΦΥΣΙΚΗ θέση σε εκφυλισμένους άξονες ή σε πλάκες
+# χωρίς αναγνωρίσιμο περίγραμμα. Ο,τι δεν μετριέται εδώ μπορεί να παραβιαστεί
+# σιωπηλά - γι' αυτό ΚΑΘΕ κανόνας θέσης δείκτη μετριέται ρητά.
+stviol=[]
+if len(sys.argv)>2:
+    def _marker_parts(blks, n_, ox, oy):
+        mbl = slab_marker_boxes(blks[n_])
+        if not mbl: return None, None
+        xs=[]; ys=[]
+        for x,y,w,h,rot in mbl:
+            bb=text_bbox(x+ox,y+oy,w,h,rot); xs+=[bb[0],bb[2]]; ys+=[bb[1],bb[3]]
+        ub=(min(xs),min(ys),max(xs),max(ys))
+        cbx=None
+        for e in entities_from_pairs(blks[n_]):
+            if e[0][1]=='CIRCLE':
+                d_=to_dict(e)
+                if d_.get(8,[''])[0]=='slab_center':
+                    cx=float(d_[10][0])+ox; cy=float(d_[20][0])+oy; r_=float(d_[40][0])
+                    cbx=(cx-r_,cy-r_,cx+r_,cy+r_)
+        return ub, cbx
+    for n_ in sorted(blocks):
+        if not re.match(r'FL-?\d+_SLAB\d+$', n_): continue
+        ub_o, cb_o = _marker_parts(blocks, n_, *ins.get(n_,(0,0)))
+        ub_i, cb_i = _marker_parts(blocks_in, n_, *ins_in.get(n_,(0,0)))
+        if ub_o is None or ub_i is None: continue
+        mvx=(ub_o[0]+ub_o[2])/2-(ub_i[0]+ub_i[2])/2
+        mvy=(ub_o[1]+ub_o[3])/2-(ub_i[1]+ub_i[3])/2
+        poly = sp_.get(n_)
+        pieces=[ub_o]+([cb_o] if cb_o else [])
+        bad=[]
+        if poly:
+            x_ok=(poly[2]-poly[0])>=0.05; y_ok=(poly[3]-poly[1])>=0.05
+            for pb in pieces:
+                if x_ok and (pb[0]<poly[0]-0.05 or pb[2]>poly[2]+0.05): bad.append('εκτός πλάκας x')
+                if y_ok and (pb[1]<poly[1]-0.05 or pb[3]>poly[3]+0.05): bad.append('εκτός πλάκας y')
+            if not x_ok and abs(mvx)>0.35+1e-6: bad.append('>±0.35 x')
+            if not y_ok and abs(mvy)>0.35+1e-6: bad.append('>±0.35 y')
+        else:
+            if abs(mvx)>0.35+1e-6 or abs(mvy)>0.35+1e-6: bad.append('μη αναγν. πλάκα >±0.35')
+        if bad:
+            stviol.append((n_, '/'.join(sorted(set(bad))), round(mvx,2), round(mvy,2)))
+print('ΣΤ) Δείκτες πλακών εκτός ορίων:', len(stviol), stviol[:6])
+print('AUDIT_TOTAL', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol)+len(stviol))
