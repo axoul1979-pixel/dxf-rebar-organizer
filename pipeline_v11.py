@@ -2693,15 +2693,7 @@ def process_all(input_path, is_training_file=False):
                                     # (beam_text_slide), και κρατιέται μόνο θέση που
                                     # ΚΛΕΙΝΕΙ τη λύση για τον mover.
                                     if not done_m:
-                                        for _btw in _bts9:
-                                            _snap_bi9 = dict(insert_final); _snap_bt9 = dict(text_local_final)
-                                            _plw9 = [b_ for b_, n_d in all_placed_text_boxes(exclude_name=_btw) if n_d != mover]
-                                            _res9 = beam_text_slide(_btw, blocks, final_rebar_lines(), hatch_polys, _plw9, relaxed=True)
-                                            _cur9 = insert_final.get(_btw, (0.0, 0.0))
-                                            if _res9 is None or (abs(_res9[0]-_cur9[0]) < 1e-9 and abs(_res9[1]-_cur9[1]) < 1e-9):
-                                                continue
-                                            insert_final[_btw] = _res9
-                                            _done3 = False
+                                        def _retry_mover9():
                                             for sm3 in [0.05*k3 for k3 in range(0, 13)]:
                                                 for sg3 in ((1,) if sm3 == 0 else (1, -1)):
                                                     _nx3, _ny3 = mdx0 + mpx_*sm3*sg3, mdy0 + mpy_*sm3*sg3
@@ -2713,18 +2705,82 @@ def process_all(input_path, is_training_file=False):
                                                                               [cb_ for cb_, _sr in _circle_boxes()])
                                                     if _sl3 is not None:
                                                         text_local_final[mover] = _sl3
-                                                        _done3 = True
-                                                        break
+                                                        return True
                                                     insert_final[mover] = (mdx0, mdy0)
-                                                if _done3:
-                                                    break
-                                            if _dbg8:
-                                                print(f'[YIELD-BT] {_btw} -> {_res9}: retry -> {_done3}', flush=True)
-                                            if _done3:
-                                                done_m = True
+                                            return False
+                                        def _fix_rebar_blockers9(wnames):
+                                            # κείμενα ράβδων που μπλοκάρονται από τις νέες θέσεις
+                                            # των σφηνών: σύρσιμο/αλυσίδα - αλλιώς αποτυχία.
+                                            for _wn in wnames:
+                                                _wb = block_text_bboxes(blocks[_wn])
+                                                _wi = insert_final.get(_wn, (0.0, 0.0))
+                                                _cbs = [text_bbox(x_+_wi[0], y_+_wi[1], w_, h_, rot_) for x_, y_, w_, h_, rot_ in _wb]
+                                                for cb in _cbs:
+                                                    for b_, n_e in all_placed_text_boxes(exclude_name=_wn):
+                                                        if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', n_e) or n_e == mover:
+                                                            continue
+                                                        if not (cb[2] + MIN_TEXT_GAP < b_[0] or b_[2] + MIN_TEXT_GAP < cb[0] or
+                                                                cb[3] + MIN_TEXT_GAP < b_[1] or b_[3] + MIN_TEXT_GAP < cb[1]):
+                                                            _sf = _slide_text_along(n_e, final_rebar_lines(exclude=(n_e,)),
+                                                                                     [bq for bq, nq in all_placed_text_boxes(exclude_name=n_e)] +
+                                                                                     [cq for cq, _sq2 in _circle_boxes()])
+                                                            if _sf is None and not _slide_text_along_chain(n_e):
+                                                                return False
+                                                            if _sf is not None:
+                                                                text_local_final[n_e] = _sf
+                                            return True
+                                        # ΣΚΑΛΑ ΑΝΑ ΣΦΗΝΑ: (i) πλήρη εμπόδια, (ii) χωρίς τις
+                                        # άλλες σφήνες, (iii) χωρίς κείμενα ράβδων + επισκευή.
+                                        for _btw in _bts9:
+                                            if done_m:
                                                 break
-                                            insert_final.clear(); insert_final.update(_snap_bi9)
-                                            text_local_final.clear(); text_local_final.update(_snap_bt9)
+                                            _others9 = [w for w in _bts9 if w != _btw]
+                                            _variants9 = []
+                                            _v1 = [b_ for b_, n_d in all_placed_text_boxes(exclude_name=_btw) if n_d != mover]
+                                            _variants9.append((_v1, False))
+                                            _v2 = [b_ for b_, n_d in all_placed_text_boxes(exclude_name=_btw)
+                                                    if n_d != mover and n_d not in _others9]
+                                            _variants9.append((_v2, False))
+                                            _v3 = [b_ for b_, n_d in all_placed_text_boxes(exclude_name=_btw)
+                                                    if n_d != mover and not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', n_d)]
+                                            _variants9.append((_v3, True))
+                                            for _plv9, _needfix9 in _variants9:
+                                                _res9 = beam_text_slide(_btw, blocks, final_rebar_lines(), hatch_polys, _plv9, relaxed=True)
+                                                _cur9 = insert_final.get(_btw, (0.0, 0.0))
+                                                if _res9 is None or (abs(_res9[0]-_cur9[0]) < 1e-9 and abs(_res9[1]-_cur9[1]) < 1e-9):
+                                                    continue
+                                                _snap_bi9 = dict(insert_final); _snap_bt9 = dict(text_local_final)
+                                                insert_final[_btw] = _res9
+                                                _ok9 = (not _needfix9) or _fix_rebar_blockers9((_btw,))
+                                                _done3 = _ok9 and _retry_mover9()
+                                                if _dbg8:
+                                                    print(f'[YIELD-BT] {_btw} -> {_res9} (fix={_needfix9}): retry -> {_done3}', flush=True)
+                                                if _done3:
+                                                    done_m = True
+                                                    break
+                                                insert_final.clear(); insert_final.update(_snap_bi9)
+                                                text_local_final.clear(); text_local_final.update(_snap_bt9)
+                                        # ΣΥΝΔΥΑΣΤΙΚΑ: όλες οι σφήνες μαζί (η καθεμία χωρίς τις
+                                        # άλλες στα εμπόδιά της), μετά retry.
+                                        if not done_m and len(_bts9) >= 2:
+                                            _snap_ci9 = dict(insert_final); _snap_ct9 = dict(text_local_final)
+                                            _moved9 = 0
+                                            for _btw in _bts9:
+                                                _plc9 = [b_ for b_, n_d in all_placed_text_boxes(exclude_name=_btw)
+                                                          if n_d != mover and n_d not in _bts9]
+                                                _resc9 = beam_text_slide(_btw, blocks, final_rebar_lines(), hatch_polys, _plc9, relaxed=True)
+                                                _curc9 = insert_final.get(_btw, (0.0, 0.0))
+                                                if _resc9 is not None and (abs(_resc9[0]-_curc9[0]) > 1e-9 or abs(_resc9[1]-_curc9[1]) > 1e-9):
+                                                    insert_final[_btw] = _resc9
+                                                    _moved9 += 1
+                                            _done4 = _moved9 > 0 and _fix_rebar_blockers9(tuple(_bts9)) and _retry_mover9()
+                                            if _dbg8:
+                                                print(f'[YIELD-BT] ΣΥΝΔΥΑΣΤΙΚΑ {_bts9} moved={_moved9}: retry -> {_done4}', flush=True)
+                                            if _done4:
+                                                done_m = True
+                                            else:
+                                                insert_final.clear(); insert_final.update(_snap_ci9)
+                                                text_local_final.clear(); text_local_final.update(_snap_ct9)
                                 if done_m:
                                     fixed_o = True
                                     break
