@@ -37,6 +37,9 @@ nsw = swap_marker_name_height('_s3.dxf','_s3.dxf')
 print(f'MARKER FORMAT: {nsw} δείκτες σε μορφή «Π πάνω / h= κάτω»')
 patch_layer_colors('_s3.dxf','_s4.dxf')
 patch_style('_s4.dxf', out_path, hatch_scale=0.02, orig_hatch_scale=0.1)
+if _P.P2_REPLACE:
+    _np2 = collapse_bar_geometry(out_path, set(_P.P2_REPLACE), targets=dict(_P.P2_REPLACE))
+    print('P2 REPLACE (πρόβολοι):', sorted(_P.P2_REPLACE), f'({_np2} γραμμές)')
 if _P.COLLAPSE_BARS:
     _nc = collapse_bar_geometry(out_path, set(_P.COLLAPSE_BARS))
     print('HAIRPIN COLLAPSE: %s (%d γραμμές στην ευθεία)' % (sorted(_P.COLLAPSE_BARS), _nc))

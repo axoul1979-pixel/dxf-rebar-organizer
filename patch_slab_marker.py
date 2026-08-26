@@ -131,7 +131,7 @@ def swap_marker_name_height(input_path, output_path):
     return n_sw
 
 
-def collapse_bar_geometry(path, names):
+def collapse_bar_geometry(path, names, targets=None):
     """ΕΦΕΔΡΕΙΑ ΦΟΥΡΚΕΤΑΣ: μέσα στα BLOCKS των `names`, προβάλλει ΟΛΕΣ τις LINE
     πάνω στον άξονα της μακρύτερης (κορμός) - το σχέδιο γίνεται απλή γραμμή,
     ίδιο κείμενο, ίδιες οντότητες."""
@@ -167,16 +167,35 @@ def collapse_bar_geometry(path, names):
     for n in names:
         if not segs[n]:
             continue
-        mb=None; mbl=-1.0
-        for x1,y1,x2,y2 in segs[n]:
-            l2=math.hypot(x2-x1,y2-y1)
-            if l2>mbl: mbl=l2; mb=(x1,y1,x2,y2)
+        if targets and n in targets:
+            # ΡΗΤΟΣ στόχος (P2): όλα τα τμήματα χαρτογραφούνται πάνω στη
+            # δοσμένη νέα γραμμή (τοπικές συντεταγμένες block).
+            mb = targets[n]
+            mbl = math.hypot(mb[2]-mb[0], mb[3]-mb[1])
+        else:
+            mb=None; mbl=-1.0
+            for x1,y1,x2,y2 in segs[n]:
+                l2=math.hypot(x2-x1,y2-y1)
+                if l2>mbl: mbl=l2; mb=(x1,y1,x2,y2)
         ux,uy=(mb[2]-mb[0])/mbl,(mb[3]-mb[1])/mbl
         nx,ny=-uy,ux; bx,by=mb[0],mb[1]
+        # ΚΑΝΟΝΑΣ replace.dxf: η νέα ράβδος είναι ΑΠΛΗ γραμμή μήκους ~1.5μ
+        # (αν χωράει, αλλιώς όσο ο κορμός), ΚΕΝΤΡΑΡΙΣΜΕΝΗ στον άξονα.
+        _t_all = []
+        for x1,y1,x2,y2 in segs[n]:
+            _t_all += [ (x1-bx)*ux+(y1-by)*uy, (x2-bx)*ux+(y2-by)*uy ]
+        if targets and n in targets:
+            _tc = mbl/2.0
+            _half = mbl/2.0
+        else:
+            _tc = (min(_t_all)+max(_t_all))/2.0
+            _half = min(1.5, mbl) / 2.0
+        _tlo, _thi = _tc-_half, _tc+_half
         for (x1,y1,x2,y2),v in zip(segs[n], idxs[n]):
-            d1=(x1-bx)*nx+(y1-by)*ny; d2=(x2-bx)*nx+(y2-by)*ny
-            L[v[10]]=f'{x1-d1*nx}'; L[v[20]]=f'{y1-d1*ny}'
-            L[v[11]]=f'{x2-d2*nx}'; L[v[21]]=f'{y2-d2*ny}'
+            t1=(x1-bx)*ux+(y1-by)*uy; t2=(x2-bx)*ux+(y2-by)*uy
+            t1=max(_tlo,min(_thi,t1)); t2=max(_tlo,min(_thi,t2))
+            L[v[10]]=f'{bx+t1*ux}'; L[v[20]]=f'{by+t1*uy}'
+            L[v[11]]=f'{bx+t2*ux}'; L[v[21]]=f'{by+t2*uy}'
             n_p += 1
     out = ('\r\n' if uses_crlf else '\n').join(L)
     with open(path, 'w', encoding='latin-1', newline='') as f:

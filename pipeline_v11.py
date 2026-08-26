@@ -420,11 +420,90 @@ class _VDict(dict):
 _GEN = 0
 _FRL_CACHE = {}
 
+P2_REPLACE = {}          # ΑΝΤΙΚΑΤΑΣΤΑΣΗ ΦΟΥΡΚΕΤΑΣ-ΠΡΟΒΟΛΟΥ (υπόδειγμα replace.dxf):
+                         # slabbar με ΚΛΕΙΣΤΑ Π-άγκιστρα ΚΑΙ στα δύο άκρα
+                         # (μόνο πρόβολοι) -> όλη η ράβδος+ετικέτα γίνεται
+                         # διακεκομμένη γραμμή ~1.5μ + ίδια ετικέτα δίπλα.
+                         # name -> (x1,y1,x2,y2) νέα γραμμή σε ΤΟΠΙΚΕΣ συντ/νες.
+
+def detect_p2(ln):
+    """Κλειστό Π ΚΑΙ στα δύο άκρα: παράλληλη επιστροφή (>=0.30, κάθετη
+    απόσταση 0.10-0.30) + κάθετο καπάκι μήκους ~ ίσου με την απόσταση."""
+    if len(ln) < 7:
+        return None
+    mb = max(ln, key=lambda s: math.hypot(s[2]-s[0], s[3]-s[1]))
+    L = math.hypot(mb[2]-mb[0], mb[3]-mb[1])
+    if L < 0.8:
+        return None
+    ux, uy = (mb[2]-mb[0])/L, (mb[3]-mb[1])/L
+    b0, b1 = mb[0], mb[1]
+    def _tp(x, y):
+        return ((x-b0)*ux + (y-b1)*uy, (x-b0)*-uy + (y-b1)*ux)
+    ends_ok = [False, False]
+    for x1, y1, x2, y2 in ln:
+        l = math.hypot(x2-x1, y2-y1)
+        if l < 0.05:
+            continue
+        t1, p1 = _tp(x1, y1); t2, p2 = _tp(x2, y2)
+        par = abs(((x2-x1)*ux + (y2-y1)*uy)/l)
+        if par > 0.9 and l >= 0.30 and 0.10 <= abs((p1+p2)/2) <= 0.30:
+            g = abs((p1+p2)/2)
+            for e, te in enumerate((0.0, L)):
+                if min(abs(t1-te), abs(t2-te)) < 0.10:
+                    for xx1, yy1, xx2, yy2 in ln:
+                        ll = math.hypot(xx2-xx1, yy2-yy1)
+                        if ll < 0.05:
+                            continue
+                        pr = abs(((xx2-xx1)*ux + (yy2-yy1)*uy)/ll)
+                        tt1, _ = _tp(xx1, yy1); tt2, _ = _tp(xx2, yy2)
+                        if pr < 0.3 and abs(ll-g) < 0.06 and min(abs(tt1-te), abs(tt2-te)) < 0.10:
+                            ends_ok[e] = True
+    if not all(ends_ok):
+        return None
+    return (mb, L, ux, uy)
+
 COLLAPSE_BARS = set()    # ΕΦΕΔΡΕΙΑ ΦΟΥΡΚΕΤΑΣ (εγκεκριμένη): ράβδοι με άγκιστρα/
                          # φουρκέτες στα ΔΥΟ άκρα των οποίων τα σκέλη κόβουν
                          # γειτονικά κείμενα και ΚΑΜΙΑ νόμιμη κίνηση δεν λύνει -
                          # η γεωμετρία τους καταρρέει πάνω στη γραμμή-κορμό
                          # (ίδιο κείμενο, ίδιες οντότητες, απλή γραμμή).
+
+def _is_closed_pi_bar(lines):
+    """ΚΑΝΟΝΑΣ ΜΗΧΑΝΙΚΟΥ (replace.dxf): ράβδος ΠΡΟΒΟΛΟΥ με ΚΛΕΙΣΤΟ άγκιστρο
+    σχήματος «Π» ΚΑΙ στα ΔΥΟ άκρα (>=2 κάθετα σκέλη + 1 παράλληλο «καπάκι»
+    εκτός άξονα, σε κάθε άκρο). ΜΟΝΟ αυτός ο τύπος αντικαθίσταται."""
+    if len(lines) < 7:
+        return False
+    mb = max(lines, key=lambda s: math.hypot(s[2]-s[0], s[3]-s[1]))
+    L = math.hypot(mb[2]-mb[0], mb[3]-mb[1])
+    if L < 0.5:
+        return False
+    ux, uy = (mb[2]-mb[0])/L, (mb[3]-mb[1])/L
+    nx, ny = -uy, ux
+    b0 = mb[0]*ux + mb[1]*uy; b1 = mb[2]*ux + mb[3]*uy
+    lo, hi = min(b0, b1), max(b0, b1)
+    bx, by = mb[0], mb[1]
+    ends = {0: [0, 0], 1: [0, 0]}
+    for x1, y1, x2, y2 in lines:
+        l2 = math.hypot(x2-x1, y2-y1)
+        if l2 < 0.03 or abs(l2-L) < 1e-9:
+            continue
+        cosu = abs(((x2-x1)*ux + (y2-y1)*uy)/l2)
+        tmid = ((x1+x2)/2)*ux + ((y1+y2)/2)*uy
+        dperp = abs(((x1+x2)/2 - bx)*nx + ((y1+y2)/2 - by)*ny)
+        near0 = tmid < lo + 0.30*(hi-lo)
+        near1 = tmid > hi - 0.30*(hi-lo)
+        if not (near0 or near1):
+            continue
+        k = 0 if near0 else 1
+        if cosu < 0.5 and l2 >= 0.05:
+            ends[k][0] += 1
+        elif cosu > 0.94 and dperp > 0.06 and l2 >= 0.10:
+            ends[k][1] += 1
+    # κλειστό Π ανά άκρο: 1+ κάθετο σκέλος ΚΑΙ 1+ παράλληλη «επιστροφή»
+    # εκτός άξονα (η μορφή του replace.dxf: σκέλος 0.16 + επιστροφή 0.42
+    # σε απόσταση 0.16 από τον κορμό).
+    return all(ends[k][0] >= 1 and ends[k][1] >= 1 for k in (0, 1))
 
 def _collapse_lines(lines):
     """Προβολή όλων των τμημάτων μιας ράβδου πάνω στον άξονα του κορμού της."""
@@ -1749,6 +1828,8 @@ def process_all(input_path, is_training_file=False):
             rlines,_ = block_lines_local(blocks[rname])
             if rname in COLLAPSE_BARS:
                 rlines = _collapse_lines(rlines)
+            if rname in P2_REPLACE:
+                rlines = [P2_REPLACE[rname]]
             for x1,y1,x2,y2 in rlines:
                 out.append((x1+rdx, y1+rdy, x2+rdx, y2+rdy, rname))
         for _ok9 in [q for q in _FRL_CACHE if q[0] != _GEN]:
@@ -2074,8 +2155,8 @@ def process_all(input_path, is_training_file=False):
                                     if seg_intersects_bbox(_sg3, bb3):
                                         _nh2 = True; break
                                 if _nh2: break
-                            if not _nh2:
-                                pass  # ΑΠΕΝΕΡΓΟ κατόπιν εντολής: COLLAPSE_BARS.add(name)
+                            if False and not _nh2 and _is_closed_pi_bar(lines):  # BISECT
+                                COLLAPSE_BARS.add(name)
                                 success = True; fixed_any2 = True; seen2.add(name)
                                 continue
             # 4) τελευταία λύση: μετακίνηση του ΘΥΜΑΤΟΣ, αν είναι BEAM_TEXT -
@@ -3787,6 +3868,47 @@ def process_all(input_path, is_training_file=False):
                 text_local_final.clear(); text_local_final.update(_sv9t)
             _ = _done9
 
+    # ΑΝΤΙΚΑΤΑΣΤΑΣΗ ΦΟΥΡΚΕΤΑΣ-ΠΡΟΒΟΛΟΥ (ρητό υπόδειγμα μηχανικού,
+    # replace.dxf): κλειστά Π-άγκιστρα ΚΑΙ στα δύο άκρα -> η ράβδος γίνεται
+    # διακεκομμένη γραμμή μήκους min(1.5, μήκος προβόλου) στο ίχνος του
+    # κορμού, με την ΙΔΙΑ ετικέτα κεντραρισμένη δίπλα της.
+    P2_REPLACE.clear()
+    for rnp in sorted(blocks):
+        if not re.match(r'FL-?\d+_SLABBAR\d+$', rnp):
+            continue
+        rdp = insert_final.get(rnp, (0.0, 0.0))
+        if rdp[0] <= -49:
+            continue
+        lnp, _ = block_lines_local(blocks[rnp])
+        _r = detect_p2(lnp)
+        if _r is None:
+            continue
+        mbp, Lp, uxp, uyp = _r
+        _len = min(1.5, Lp)
+        _cx = (mbp[0]+mbp[2])/2.0; _cy = (mbp[1]+mbp[3])/2.0
+        nl = (_cx - uxp*_len/2.0, _cy - uyp*_len/2.0,
+              _cx + uxp*_len/2.0, _cy + uyp*_len/2.0)
+        P2_REPLACE[rnp] = nl
+        # ετικέτα: ίδιο κείμενο, κεντραρισμένη κατά μήκος, 0.05 πάνω από τη γραμμή
+        _blp = block_text_bboxes(blocks[rnp])
+        if _blp:
+            xg, yg, wg, hg, rg = _blp[0]
+            bbg = text_bbox(xg, yg, wg, hg, rg)
+            _tcx = (bbg[0]+bbg[2])/2.0; _tcy = (bbg[1]+bbg[3])/2.0
+            _nxp, _nyp = -uyp, uxp
+            _half = (bbg[3]-bbg[1])/2.0 if abs(uxp) > 0.7 else (bbg[2]-bbg[0])/2.0
+            _tgt = (_cx + _nxp*(0.05+_half), _cy + _nyp*(0.05+_half))
+            text_local_final[rnp] = (_tgt[0]-_tcx, _tgt[1]-_tcy)
+    # οι ετικέτες P2 περνούν από τους ΙΔΙΟΥΣ ελέγχους με όλα τα κείμενα:
+    # αν η κεντραρισμένη θέση συγκρούεται (κείμενα/κύκλοι/δείκτες), σύρονται
+    # κατά μήκος της ΝΕΑΣ γραμμής μέχρι καθαρή/κενά-χαρακτήρων θέση.
+    for rnp in list(P2_REPLACE):
+        _s2p = _slide_text_along(rnp, _near9(final_rebar_lines(exclude=(rnp,)), rnp),
+                                  [b_ for b_, n_p2 in all_placed_text_boxes(exclude_name=rnp)] +
+                                  [cb_ for cb_, _sp2 in _circle_boxes()])
+        if _s2p is not None:
+            text_local_final[rnp] = _s2p
+
     # ΤΕΛΙΚΟΣ ΕΛΕΓΧΟΣ ΦΟΥΡΚΕΤΑΣ (μετά ΑΠ' ΟΛΑ, ώστε καμία σειρά περασμάτων
     # να μην τον προσπερνά - περίπτωση SLABBAR14): φουρκέτα-δύο-άκρων της
     # οποίας τα ΣΚΕΛΗ κόβουν οποιοδήποτε τελικό κείμενο ενώ ο κορμός είναι
@@ -3839,8 +3961,8 @@ def process_all(input_path, is_training_file=False):
                     if seg_intersects_bbox(_sg9, bb):
                         _newhit = True; break
                 if _newhit: break
-            if not _newhit:
-                pass  # ΑΠΕΝΕΡΓΟ κατόπιν εντολής: COLLAPSE_BARS.add(rn9)
+            if False and not _newhit and _is_closed_pi_bar(ln9):  # BISECT
+                COLLAPSE_BARS.add(rn9)
 
     return insert_final, text_local_final
 
