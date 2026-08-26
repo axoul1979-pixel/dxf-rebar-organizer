@@ -116,13 +116,26 @@ if len(sys.argv)>2:
             if not x_ok and not y_ok: continue
             if x_ok and not(px1<=ncx<=px2): continue
             if y_ok and not(py1<=ncy<=py2): continue
-            has_home=True; break
+            has_home=True; hx_ok,hy_ok=x_ok,y_ok; hpx1,hpy1,hpx2,hpy2=px1,py1,px2,py2
+            break
         d_out = ins.get(n_,(0,0)); d_in = ins_in.get(n_,(0,0))
         ddx,ddy = d_out[0]-d_in[0], d_out[1]-d_in[1]
-        # ΚΑΘΟΛΙΚΗ πολιτική: κάθε ράβδος πλάκας μέσα σε ±0.35 από τη φυσική θέση
-        if abs(ddx) > 0.35+1e-6 or abs(ddy) > 0.35+1e-6:
-            eviol.append((n_, round(ddx,2), round(ddy,2)))
-print('Ε) Ράβδοι πλακών εκτός ±0.35 από τη φυσική θέση:', len(eviol), eviol[:6])
+        # ΝΕΑ ΕΝΤΟΛΗ ΜΗΧΑΝΙΚΟΥ: σε ΥΓΙΗ άξονα ΑΝΑΓΝΩΡΙΣΜΕΝΗΣ πλάκας η ράβδος
+        # κινείται ελεύθερα ΕΝΤΟΣ πλάκας (SLABBAR9 «δεξιά 3μ»). ±0.35 μένει
+        # στους εκφυλισμένους άξονες και στις μη αναγνωρισμένες πλάκες.
+        _hx=_hy=None
+        if has_home:
+            _hx, _hy = hx_ok, hy_ok
+            _lx1, _lx2 = min(hpx1, min(xs0)), max(hpx2, max(xs0))
+            _ly1, _ly2 = min(hpy1, min(ys0)), max(hpy2, max(ys0))
+            _in_x = (_lx1-0.03 <= min(xs0)+ddx and max(xs0)+ddx <= _lx2+0.03) if _hx else abs(ddx) <= 0.35+1e-6
+            _in_y = (_ly1-0.03 <= min(ys0)+ddy and max(ys0)+ddy <= _ly2+0.03) if _hy else abs(ddy) <= 0.35+1e-6
+            if not (_in_x and _in_y):
+                eviol.append((n_, round(ddx,2), round(ddy,2)))
+        else:
+            if abs(ddx) > 0.35+1e-6 or abs(ddy) > 0.35+1e-6:
+                eviol.append((n_, round(ddx,2), round(ddy,2)))
+print('Ε) Ράβδοι πλακών εκτός ζώνης (εντός πλάκας σε υγιείς άξονες, ±0.35 αλλιώς):', len(eviol), eviol[:6])
 # ΣΤ) Δείκτες πλακών (κείμενα+κύκλος): εντός της πλάκας τους στους υγιείς
 # άξονες, και ±0.35 από τη ΦΥΣΙΚΗ θέση σε εκφυλισμένους άξονες ή σε πλάκες
 # χωρίς αναγνωρίσιμο περίγραμμα. Ο,τι δεν μετριέται εδώ μπορεί να παραβιαστεί

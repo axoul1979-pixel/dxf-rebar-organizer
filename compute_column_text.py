@@ -6,7 +6,19 @@ PAD = 0.05
 STEP = 0.15
 MAX_RADIUS = 4.0
 
-def block_text_bboxes(pairlist):
+_btb_cache = {}
+def block_text_bboxes(pairlist, *a, **kw):
+    if a or kw:
+        return _block_text_bboxes_raw(pairlist, *a, **kw)
+    _k = id(pairlist)
+    _h = _btb_cache.get(_k)
+    if _h is not None and _h[0] is pairlist:
+        return _h[1]
+    _v = _block_text_bboxes_raw(pairlist)
+    _btb_cache[_k] = (pairlist, _v)
+    return _v
+
+def _block_text_bboxes_raw(pairlist):
     """Return list of (x,y,w,h,rot) rotated-rect boxes for all MTEXT in block (local coords).
     IMPORTANT: code 41 (MTEXT reference width) is NOT the tight width of the rendered text -
     it can be several times larger (a column/reference width unrelated to content length).

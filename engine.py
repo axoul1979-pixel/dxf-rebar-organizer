@@ -10,7 +10,17 @@ def load_all(path):
     blocks = get_all_blocks(path)
     return ins, blocks
 
+_bll_cache = {}
 def block_lines_local(pairlist):
+    _k = id(pairlist)
+    _h = _bll_cache.get(_k)
+    if _h is not None and _h[0] is pairlist:
+        return _h[1]
+    _v = _block_lines_local_raw(pairlist)
+    _bll_cache[_k] = (pairlist, _v)
+    return _v
+
+def _block_lines_local_raw(pairlist):
     ents = entities_from_pairs(pairlist)
     lines=[]; mtexts=[]
     for e in ents:
