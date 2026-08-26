@@ -3,7 +3,7 @@ import re, math, pickle
 from analyze import entities_from_pairs, to_dict
 from engine import load_all, block_lines_local
 from compute_column_text import block_text_bboxes, union_bbox, translate_bbox, collides
-from beambar_engine import seg_intersects_bbox, text_bbox, get_inserts as _get_inserts_early
+from beambar_engine import seg_intersects_bbox, text_bbox, strip_mtext_formatting, get_inserts as _get_inserts_early
 from hatch_engine import get_hatch_polys, bbox_poly_overlap, point_in_poly
 from perimeter import build_footprint, point_inside, bbox_outside, column_outward_dirs
 
@@ -192,6 +192,68 @@ def is_ok_relaxed(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes
         return False   # παράλληλη γραμμή μέσα στο κείμενο: απαράδεκτο, χωρίς εξαίρεση
     crossed = count_line_crossings_geom(boxes_local, dx, dy, obstacle_lines, exclude_line_names)
     return len(crossed) <= max_crossings
+
+def is_ok_chargap(boxes_local, contents, dx, dy, obstacle_lines, hatch_polys, placed_boxes,
+                   exclude_line_names=()):
+    """Σαν το is_ok_tight, αλλά γραμμές επιτρέπονται μέσα στο κείμενο ΜΟΝΟ στα
+    κενά μεταξύ χαρακτήρων (±35% του πλάτους χαρακτήρα γύρω από κάθε όριο,
+    ή μέσα σε κενό-space). Διαγράμμιση/κείμενα/επικαλύψεις: αυστηρά."""
+    from hatch_engine import bbox_poly_overlap
+    for bi, (x, y, w, h, rot) in enumerate(boxes_local):
+        bx = text_bbox(x+dx, y+dy, w, h, rot)
+        for poly, pname in hatch_polys:
+            if pname in exclude_line_names:
+                continue
+            if bbox_poly_overlap(bx, poly):
+                return False
+        for pb in placed_boxes:
+            if not (bx[2] + MIN_TEXT_GAP < pb[0] or pb[2] + MIN_TEXT_GAP < bx[0] or
+                    bx[3] + MIN_TEXT_GAP < bx[1] or pb[3] + MIN_TEXT_GAP < bx[1]):
+                if not (bx[2] + MIN_TEXT_GAP < pb[0] or pb[2] + MIN_TEXT_GAP < bx[0] or
+                        bx[3] + MIN_TEXT_GAP < pb[1] or pb[3] + MIN_TEXT_GAP < bx[1]):
+                    return False
+        txt = (contents[bi] if bi < len(contents) else '') or ''
+        ncc = max(len(txt), 1)
+        hor = abs(math.cos(math.radians(rot))) > 0.7
+        c0, c1, c2, c3 = bx
+        tw = (c2-c0) if hor else (c3-c1)
+        cw = tw / ncc
+        gaps = []
+        for k in range(1, ncc):
+            gaps.append(k*cw)
+        sp_spans = [(k*cw, (k+1)*cw) for k, ch in enumerate(txt) if ch == ' ']
+        p_ = 0.012
+        i0, i1 = (c0, c2) if hor else (c1, c3)
+        j0, j1 = (c1, c3) if hor else (c0, c2)
+        for seg in obstacle_lines:
+            if len(seg) > 4 and seg[4] in exclude_line_names:
+                continue
+            x1_, y1_, x2_, y2_ = seg[0], seg[1], seg[2], seg[3]
+            if max(x1_, x2_) < c0-1e-9 or min(x1_, x2_) > c2+1e-9 or                max(y1_, y2_) < c1-1e-9 or min(y1_, y2_) > c3+1e-9:
+                continue
+            a0, a1 = (x1_, x2_) if hor else (y1_, y2_)
+            b0, b1 = (y1_, y2_) if hor else (x1_, x2_)
+            if not seg_intersects_bbox((x1_, y1_, x2_, y2_), (c0+0.01, c1+0.01, c2-0.01, c3-0.01)):
+                continue
+            L_ = math.hypot(x2_-x1_, y2_-y1_)
+            if L_ < 1e-9:
+                return False
+            comp_al = abs((a1-a0)/L_)
+            if comp_al > 0.35:
+                return False  # πλάγια/παράλληλη: κόβει γράμματα αναγκαστικά
+            # σχεδόν κάθετη: θέση διέλευσης κατά μήκος του κειμένου
+            tt = ((a0+a1)/2 - i0)
+            ok_gap = False
+            for g in gaps:
+                if abs(tt - g) <= max(0.35*cw, p_):
+                    ok_gap = True; break
+            if not ok_gap:
+                for s0, s1 in sp_spans:
+                    if s0 + 0.15*cw <= tt <= s1 - 0.15*cw:
+                        ok_gap = True; break
+            if not ok_gap:
+                return False
+    return True
 
 def is_ok_tight(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes, exclude_line_names=(),
                  max_row_crossings=0):
@@ -1313,6 +1375,15 @@ def process_all(input_path, is_training_file=False):
             if is_ok_full(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,)):
                 return (rtx, rty)
             if is_ok_tight(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,)):
+                return (rtx, rty)
+        # ΦΑΣΗ Α2 (κανόνας μηχανικού): γραμμή μέσα στο κείμενο ΜΟΝΟ στα κενά
+        # μεταξύ χαρακτήρων - το «10» δεν κόβεται ούτε στο 1 ούτε στο 0.
+        _cont_r = []
+        for e_ in entities_from_pairs(blocks[rname]):
+            if e_[0][1] == 'MTEXT':
+                _cont_r.append(strip_mtext_formatting(to_dict(e_).get(1, [''])[0]))
+        for rtx, rty in _ts_all:
+            if is_ok_chargap(rbl, _cont_r, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,)):
                 return (rtx, rty)
         for rtx, rty in _ts_all:
             if is_ok_relaxed(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,), max_crossings=1):
@@ -3396,17 +3467,14 @@ def process_all(input_path, is_training_file=False):
     # γράμματα (οσοδήποτε μικρή μετακίνηση, 0.10-0.30 συνήθως αρκεί),
     # παίρνεται. Καμία άλλη αλλαγή, κανένας άλλος κανόνας δεν χαλαρώνει.
     def _core_cut9(n_):
+        # «κομμένο» = γραμμή ΠΑΝΩ σε ΧΑΡΑΚΤΗΡΕΣ. Διέλευση από τα κενά μεταξύ
+        # χαρακτήρων (κανόνας μηχανικού) ΔΕΝ μετρά ως κόψιμο.
         d_ = insert_final.get(n_, (0.0, 0.0)); t_ = text_local_final.get(n_, (0.0, 0.0))
-        for x_, y_, w_, h_, r_ in block_text_bboxes(blocks[n_]):
-            bb_ = text_bbox(x_+d_[0]+t_[0], y_+d_[1]+t_[1], w_, h_, r_)
-            p_ = 0.015
-            core_ = (bb_[0]+p_, bb_[1]+p_, bb_[2]-p_, bb_[3]-p_)
-            if core_[2] <= core_[0] or core_[3] <= core_[1]:
-                continue
-            for s_ in final_rebar_lines(exclude=(n_,)):
-                if seg_intersects_bbox(s_[:4], core_):
-                    return True
-        return False
+        _cs_ = [strip_mtext_formatting(to_dict(e_).get(1, [''])[0])
+                for e_ in entities_from_pairs(blocks[n_]) if e_[0][1] == 'MTEXT']
+        _bl_ = block_text_bboxes(blocks[n_])
+        return not is_ok_chargap(_bl_, _cs_, d_[0]+t_[0], d_[1]+t_[1],
+                                  final_rebar_lines(exclude=(n_,)), [], [], (n_,))
     for _lp9 in range(2):
         _mv9 = 0
         for rn8 in sorted(blocks):
