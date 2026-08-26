@@ -1743,8 +1743,9 @@ var CFG = {
   DIM_SAFE: 0.25,               // απόσταση ασφαλείας από ΚΑΘΕ στοιχείο του σχεδίου
   /* --- αντίγραφο σκελετού δίπλα στην κάτοψη --- */
   DUP_RE: /^FL-?\d+_(COLUMN|BEAM)\d+$/,   // ΜΟΝΟ κολώνες & δοκοί (όχι κείμενα)
-  DUP_DX: -100.0,               // 100μ αριστερά
+  DUP_GAP: 100.0,               // ΚΕΝΟ 100μ ανάμεσα στο αντίγραφο και την κάτοψη
   DUP_DY: 0.0,
+  DUP_LINE_LAYERS: ['slab_poly'],  // + μεμονωμένες γραμμές αυτών των layers
   DIM_TICK: 0.09,               // μισό μήκος ακίδας 45°
   DIM_EXT_GAP: 0.10,            // κενό παρειάς → γραμμή προέκτασης
   DIM_EXT_OVER: 0.13,           // προεξοχή πέρα από τη γραμμή διάστασης
@@ -2787,6 +2788,40 @@ function copyStructure(text, cfgOverride) {
   var mx = f.maxHandle || 0;
   function newH() { return (++mx).toString(16).toUpperCase(); }
 
+  /* Α' φάση: ποιο είναι το δεξί άκρο ΤΟΥ ΑΝΤΙΓΡΑΦΟΥ και το αριστερό άκρο της
+     κάτοψης (μαζί με τις διαστάσεις της) - ώστε το ΚΕΝΟ να βγει ακριβώς
+     DUP_GAP, όχι η μετατόπιση. */
+  var srcMaxX = -1e18;
+  function noteX(x) { if (x > srcMaxX) srcMaxX = x; }
+  for (var s1 = 0; s1 < f.blocks.length; s1++) {
+    var sb = f.blocks[s1], sp = f.inserts[sb.name];
+    if (!sp || !cfg.DUP_RE.test(sb.name)) continue;
+    var sl = linesOfBlock(sb);
+    for (var s2 = 0; s2 < sp.length; s2++)
+      for (var s3 = 0; s3 < sl.length; s3++) {
+        noteX(sp[s2][0] + (sp[s2][2] || 1) * (sl[s3][0] - sb.bx));
+        noteX(sp[s2][0] + (sp[s2][2] || 1) * (sl[s3][2] - sb.bx));
+      }
+  }
+  var wantLayer0 = {};
+  (cfg.DUP_LINE_LAYERS || []).forEach(function (L) { wantLayer0[L] = 1; });
+  for (var s4 = 0; s4 < f.blocks.length; s4++) {
+    var sb2 = f.blocks[s4], sp2 = f.inserts[sb2.name];
+    if (!sp2) continue;
+    for (var s5 = 0; s5 < sb2.body.length; s5++) {
+      var sc = sb2.body[s5];
+      if (sc[0].v.trim() !== 'LINE' || !wantLayer0[(val(sc, 8) || '').trim()]) continue;
+      var a1 = parseFloat(val(sc, 10)), a2 = parseFloat(val(sc, 11));
+      for (var s6 = 0; s6 < sp2.length; s6++) {
+        noteX(sp2[s6][0] + (sp2[s6][2] || 1) * (a1 - sb2.bx));
+        noteX(sp2[s6][0] + (sp2[s6][2] || 1) * (a2 - sb2.bx));
+      }
+    }
+  }
+  var planMinX = (f.allBox ? f.allBox.minx : 0);
+  var DX = (srcMaxX > -1e17) ? (planMinX - cfg.DUP_GAP - srcMaxX) : -cfg.DUP_GAP;
+  cfg.DUP_DX = DX;
+
   var copies = [], names = {};
   for (var i = 0; i < f.ents.length; i++) {
     var ch = f.ents[i];
@@ -2803,7 +2838,45 @@ function copyStructure(text, cfgOverride) {
     });
     copies.push(out);
   }
-  if (!copies.length) return { text: text, copied: 0, blocks: 0, warnings: ['Δεν βρέθηκαν blocks COLUMN/BEAM - δεν έγινε αντίγραφο.'] };
+  /* Οι γραμμές του slab_poly ζουν ΜΕΣΑ στα SLAB blocks, μαζί με δείκτες και
+     κείμενα - άρα δεν γίνεται να αντιγραφεί το block. Αντιγράφονται μία-μία
+     ως αυτόνομες LINE, με κλώνο της ίδιας της γραμμής (ίδιοι κωδικοί, ίδιο
+     layer) και συντεταγμένες μετατρεμμένες σε πραγματικές. */
+  var wantLayer = {};
+  (cfg.DUP_LINE_LAYERS || []).forEach(function (L) { wantLayer[L] = 1; });
+  var nLines = 0, DROP_C = { 102: 1, 330: 1, 360: 1 };
+  for (var bi = 0; bi < f.blocks.length; bi++) {
+    var blk = f.blocks[bi], pos = f.inserts[blk.name];
+    if (!pos) continue;
+    for (var bj = 0; bj < blk.body.length; bj++) {
+      var ch2 = blk.body[bj];
+      if (ch2[0].v.trim() !== 'LINE') continue;
+      if (!wantLayer[(val(ch2, 8) || '').trim()]) continue;
+      var lx1 = parseFloat(val(ch2, 10)), ly1 = parseFloat(val(ch2, 20));
+      var lx2 = parseFloat(val(ch2, 11)), ly2 = parseFloat(val(ch2, 21));
+      if (isNaN(lx1) || isNaN(ly1) || isNaN(lx2) || isNaN(ly2)) continue;
+      for (var bp = 0; bp < pos.length; bp++) {
+        var px = pos[bp][0], py = pos[bp][1], sx = pos[bp][2] || 1, sy = pos[bp][3] || 1;
+        var X1 = px + sx * (lx1 - blk.bx) + cfg.DUP_DX, Y1 = py + sy * (ly1 - blk.by) + cfg.DUP_DY;
+        var X2 = px + sx * (lx2 - blk.bx) + cfg.DUP_DX, Y2 = py + sy * (ly2 - blk.by) + cfg.DUP_DY;
+        var seen = {}, out2 = [];
+        for (var q = 0; q < ch2.length; q++) {
+          var p2 = ch2[q];
+          if (p2.c === 102) { while (q < ch2.length && !(ch2[q].c === 102 && ch2[q].v.trim() === '}')) q++; continue; }
+          if (DROP_C[p2.c]) continue;
+          if (p2.c === 5) { out2.push(mk(5, newH())); continue; }
+          if (p2.c === 10 && !seen[10]) { seen[10] = 1; out2.push(mk(10, num(X1))); continue; }
+          if (p2.c === 20 && !seen[20]) { seen[20] = 1; out2.push(mk(20, num(Y1))); continue; }
+          if (p2.c === 11 && !seen[11]) { seen[11] = 1; out2.push(mk(11, num(X2))); continue; }
+          if (p2.c === 21 && !seen[21]) { seen[21] = 1; out2.push(mk(21, num(Y2))); continue; }
+          out2.push(p2);
+        }
+        copies.push(out2); nLines++;
+      }
+    }
+  }
+
+  if (!copies.length) return { text: text, copied: 0, blocks: 0, lines: 0, warnings: ['Δεν βρέθηκαν blocks COLUMN/BEAM - δεν έγινε αντίγραφο.'] };
 
   var P = f.pairs, a0 = -1, b0 = -1;
   for (var w = 0; w < P.length; w++) if (P[w].c === 2 && P[w].v.trim() === 'ENTITIES') { a0 = w + 1; break; }
@@ -2817,7 +2890,7 @@ function copyStructure(text, cfgOverride) {
         NP[hs + 1] = mk(5, (mx + 16).toString(16).toUpperCase());
   }
   return { text: ser(NP, f.eol), copied: copies.length, blocks: Object.keys(names).length,
-           dx: cfg.DUP_DX, warnings: [] };
+           lines: nLines, dx: DX, gap: cfg.DUP_GAP, warnings: [] };
 }
 
 /* ---------- κύρια συνάρτηση ---------- */
@@ -3411,7 +3484,9 @@ async function runAll() {
           const cp = DXFMERGE.copyStructure(DXFMERGE.bytesToStr(dxf));
           if (cp.copied) {
             dxf = DXFMERGE.strToBytes(cp.text);
-            log("  Αντίγραφο σκελετού: " + cp.copied + " INSERT (COLUMN & BEAM) στα " + cp.dx + "μ");
+            log("  Αντίγραφο σκελετού σε κενό " + cp.gap + "μ αριστερά (μετατόπιση " +
+                cp.dx.toFixed(2) + "): " + (cp.copied - cp.lines) +
+                " blocks COLUMN & BEAM + " + cp.lines + " γραμμές slab_poly");
           }
           cp.warnings.forEach(w => log("  ⚠ " + w));
         } catch (e) { log("  ⚠ Το αντίγραφο σκελετού δεν μπήκε: " + (e.message || e)); }
