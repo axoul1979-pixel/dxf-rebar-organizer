@@ -91,6 +91,20 @@
   .credit .txt{ font:600 .8rem 'Saira Condensed'; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); }
   .credit .txt b{ color:var(--frame); font-weight:700; }
   @media (prefers-reduced-motion: reduce){ .spin{ animation:none; } }
+
+  /* --- λίστα σταθμών --- */
+  .flist{ max-height:210px; overflow:auto; border:1px solid rgba(255,255,255,.10); border-radius:6px; }
+  .fl-empty{ padding:6px 8px; opacity:.55; }
+  .fl-row{ display:grid; grid-template-columns:1fr 1.25fr auto auto; gap:8px; align-items:center;
+           padding:4px 8px; border-bottom:1px solid rgba(255,255,255,.06); font-size:12.5px; }
+  .fl-row:last-child{ border-bottom:0; }
+  .fl-n{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fl-l{ opacity:.65; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fl-s{ opacity:.85; white-space:nowrap; }
+  .fl-s.ok{ color:var(--ok); } .fl-s.bad{ color:var(--bad); }
+  .fl-d a{ text-decoration:none; font-size:15px; opacity:.85; }
+  button.mini{ width:auto; margin-top:8px; padding:4px 10px; font-size:11.5px;
+               background:transparent; border:1px solid rgba(255,255,255,.22); color:inherit; }
 </style>
 </head>
 <body>
@@ -110,18 +124,19 @@
       <span class="bar" style="bottom:38px;right:16px;width:170px;height:1.5px"></span>
       <div class="target">
         <div class="tbox">
-          <h2>Ρίξε εδώ το DXF</h2>
-          <p>ή πάτησε για επιλογή αρχείου · ξυλότυπος ASCII (blocks FLn_*)</p>
+          <h2>Ρίξε εδώ ΟΛΑ τα DXF</h2>
+          <p>μία στάθμη ανά αρχείο · ονομασία <b>preffix_or-2 … preffix_or9</b><br>ξυλότυπος ASCII (blocks FLn_*) — παράγεται ένα ενοποιημένο DXF</p>
           <div class="fname" id="finfo"></div>
-          <button type="button" id="pick" style="width:auto;margin-top:14px;padding:10px 20px;background:transparent;border:1.5px solid var(--y);color:var(--y);">Επιλογή αρχείου…</button>
+          <button type="button" id="pick" style="width:auto;margin-top:14px;padding:10px 20px;background:transparent;border:1.5px solid var(--y);color:var(--y);">Επιλογή αρχείων…</button>
         </div>
       </div>
     </div>
-    <input type="file" id="file" accept=".dxf" hidden>
+    <input type="file" id="file" accept=".dxf" multiple hidden>
 
     <div class="tblock">
       <div class="tb-title">DXF <span class="k">R</span>EBAR AUTO-TIDY <span class="num">Π</span>ΙΝΑΚΙΔΑ</div>
       <div class="tb-row"><div class="tb-k">Αρχειο</div><div class="tb-v" id="tb-file">—</div></div>
+      <div class="tb-row"><div class="tb-k">Σταθμες</div><div class="tb-v"><div id="flist" class="flist"><div class="fl-empty">κανένα αρχείο</div></div><button type="button" id="clear" class="mini">καθαρισμός λίστας</button></div></div>
       <div class="tb-row"><div class="tb-k">Φασεις</div><div class="tb-v">
         <div class="ph" id="ph0">Περιβάλλον Python</div>
         <div class="ph" id="ph1">Ανάγνωση σχεδίου</div>
@@ -133,7 +148,7 @@
       <div class="tb-row"><div class="tb-k">Κατασταση</div><div class="tb-v" id="stext">Φόρτωση…</div></div>
       <div class="actions">
         <button id="run" disabled>Εκτέλεση τακτοποίησης</button>
-        <a id="dl"><button>⬇ Κατέβασμα DXF</button></a>
+        <a id="dl"><button>⬇ Κατέβασμα ΕΝΟΠΟΙΗΜΕΝΟΥ DXF</button></a>
       </div>
     </div>
 
@@ -146,7 +161,7 @@
 <footer>Όλα τρέχουν τοπικά στη συσκευή σου — το σχέδιο δεν ανεβαίνει πουθενά.</footer>
 
 <div class="timing-note">
-  ⏱ Ο μέσος χρόνος παραγωγής τακτοποιημένου σχεδίου μίας στάθμης διαρκεί <b>μερικά λεπτά</b>.
+  ⏱ Ο μέσος χρόνος παραγωγής τακτοποιημένου σχεδίου μίας στάθμης διαρκεί <b>μερικά λεπτά</b> — οι στάθμες τρέχουν <b>η μία μετά την άλλη</b>, οπότε πολλαπλασίασέ το επί το πλήθος των αρχείων.
   <i>Keep calm and… wait.</i> Σε επόμενη έκδοση θα γίνει πιο γρήγορο.
 </div>
 
@@ -1597,9 +1612,11 @@ const PIPELINE_B64 =
 
 const $ = id => document.getElementById(id);
 const log = s => { $("log").textContent += s + "\n"; $("log").scrollTop = 1e9; };
-let dxfBuf = null, dxfName = null, workerReady = false, t0 = 0, tick = null;
+let workerReady = false, t0 = 0, tick = null;
+let queue = [];            // {name, file, level, prefix, status, out, audit}
+let running = false, sawZero = false, pending = null;
 
-function phase(i, state) { const el = $("ph"+i); if (el) el.className = "ph " + state; }
+function phase(i, state) { const el = $("ph" + i); if (el) el.className = "ph " + state; }
 function busy(on, text) {
   const st = document.getElementById("timer") && document.getElementById("timer").parentElement;
   if (st) st.className = "tb-v" + (on ? " running" : "");
@@ -1609,6 +1626,672 @@ function busy(on, text) {
   else clearInterval(tick);
 }
 
+/* ==================================================================== */
+/*  ΕΝΟΠΟΙΗΤΗΣ ΣΤΑΘΜΩΝ - self.DXFMERGE                                  */
+/* ==================================================================== */
+/* =====================================================================
+   ΕΝΟΠΟΙΗΣΗ ΣΤΑΘΜΩΝ — merge_dxf.js
+   Παίρνει τα ΤΑΚΤΟΠΟΙΗΜΕΝΑ DXF (ένα ανά στάθμη) και τα ενώνει σε ΕΝΑ DXF,
+   με κάθε κάτοψη μεταφερμένη ώστε το pick point της (max x, min y του
+   φέροντος σκελετού) να πέσει στο (BASE_X, (n+2)*STEP_Y).
+
+   Καθαρή JS, καμία εξάρτηση. Δουλεύει σε κείμενο latin-1 (byte-προς-byte).
+   ===================================================================== */
+(function (global) {
+'use strict';
+
+var CFG = {
+  STEP_Y: 50.0,                 // κατακόρυφο βήμα σταθμών
+  BASE_X: 0.0,                  // x του pick point κάθε στάθμης
+  BASE_LEVEL: -2,               // η στάθμη που πάει στο y = 0
+  TITLE: true,                  // να γραφτεί τίτλος στάθμης;
+  TITLE_H: 0.60,                // ύψος κειμένου τίτλου
+  TITLE_DY: -2.00,              // πόσο κάτω από τη βάση της κάτοψης
+  TITLE_LAYER: 'LEVEL_TITLE',   // layer τίτλων (ASCII - ασφαλές για R12)
+  TITLE_COLOR: 7,
+  STRUCT_RE: /^FL-?\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$/,
+  MAX_NAME: 31                  // όριο μήκους ονόματος block σε R12
+};
+
+/* ---------- bytes <-> latin-1 string (1:1, χωρίς αλλοίωση) ---------- */
+function bytesToStr(u8) {
+  var s = '', CH = 0x8000;
+  for (var i = 0; i < u8.length; i += CH) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  }
+  return s;
+}
+function strToBytes(s) {
+  var u8 = new Uint8Array(s.length);
+  for (var i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i) & 0xff;
+  return u8;
+}
+
+/* ---------- ονόματα σταθμών ---------- */
+function parseLevelName(filename) {
+  var base = String(filename).replace(/\.dxf$/i, '');
+  base = base.replace(/_tidied$/i, '');
+  var m = base.match(/^(.*?)_or_?(-?\d+)$/i);
+  if (!m) return null;
+  return { prefix: m[1], level: parseInt(m[2], 10) };
+}
+
+function levelTitle(n, levels) {
+  var has = function (k) { return levels.indexOf(k) >= 0; };
+  var top = Math.max.apply(null, levels);
+  if (n === -2) return 'ΘΕΜΕΛΙΩΣΗ';
+  if (n === -1) return has(-2) ? 'ΟΡΟΦΗ ΥΠΟΓΕΙΟΥ' : 'ΘΕΜΕΛΙΩΣΗ';
+  if (n === 0) return 'ΟΡΟΦΗ';
+  if (n === top) return 'ΟΡΟΦΗ ΑΝΩΤΑΤΗΣ ΣΤΑΘΜΗΣ/ΑΠΟΛ.ΚΛΙΜ.';
+  return 'ΟΡΟΦΗ ' + n + 'ΟΥ ΟΡΟΦΟΥ';
+}
+
+/* Κείμενο τίτλου στην ΙΔΙΑ κωδικοσελίδα με το υπόλοιπο σχέδιο.
+   Τα FESPA DXF είναι ANSI_1253 και γράφουν τα ελληνικά ως raw bytes cp1253·
+   αν η κωδικοσελίδα είναι άλλη/άγνωστη, πέφτουμε σε escapes \\U+03A6. */
+var CP1253_MAP = "20AC80201A82019283201E8420268520208620218720308920398B201891201992201C93201D94202295201396201497212299203A9B00A0A00385A10386A200A3A300A4A400A5A500A6A600A7A700A8A800A9A900ABAB00ACAC00ADAD00AEAE2015AF00B0B000B1B100B2B200B3B30384B400B5B500B6B600B7B70388B80389B9038ABA00BBBB038CBC00BDBD038EBE038FBF0390C00391C10392C20393C30394C40395C50396C60397C70398C80399C9039ACA039BCB039CCC039DCD039ECE039FCF03A0D003A1D103A3D303A4D403A5D503A6D603A7D703A8D803A9D903AADA03ABDB03ACDC03ADDD03AEDE03AFDF03B0E003B1E103B2E203B3E303B4E403B5E503B6E603B7E703B8E803B9E903BAEA03BBEB03BCEC03BDED03BEEE03BFEF03C0F003C1F103C2F203C3F303C4F403C5F503C6F603C7F703C8F803C9F903CAFA03CBFB03CCFC03CDFD03CEFE";
+var CP1253 = (function () {
+  var m = {};
+  for (var i = 0; i < CP1253_MAP.length; i += 6)
+    m[parseInt(CP1253_MAP.substr(i, 4), 16)] = parseInt(CP1253_MAP.substr(i + 4, 2), 16);
+  return m;
+})();
+function dxfEsc(s) {
+  var out = '';
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    out += (c < 128) ? s[i] : '\\U+' + ('000' + c.toString(16).toUpperCase()).slice(-4);
+  }
+  return out;
+}
+function dxfText(s, codepage) {
+  if (codepage === 'ANSI_1253') {
+    var out = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 128) { out += s[i]; continue; }
+      if (CP1253[c] === undefined) return dxfEsc(s);      // ένας άγνωστος -> όλο σε escapes
+      out += String.fromCharCode(CP1253[c]);
+    }
+    return out;
+  }
+  return dxfEsc(s);
+}
+
+/* ---------- ζεύγη DXF ---------- */
+function parsePairs(text) {
+  var raw = text.split('\n'), P = [], i = 0;
+  while (i < raw.length - 1) {
+    var cr = raw[i]; if (cr.charCodeAt(cr.length - 1) === 13) cr = cr.slice(0, -1);
+    var c = parseInt(cr.trim(), 10);
+    if (isNaN(c)) { i++; continue; }
+    var v = raw[i + 1]; if (v.charCodeAt(v.length - 1) === 13) v = v.slice(0, -1);
+    P.push({ c: c, cr: cr, v: v });
+    i += 2;
+  }
+  return P;
+}
+function mk(c, v) { return { c: c, cr: ('  ' + c).slice(-Math.max(3, String(c).length)), v: String(v) }; }
+function ser(P, eol) {
+  var out = [];
+  for (var i = 0; i < P.length; i++) { out.push(P[i].cr); out.push(P[i].v); }
+  return out.join(eol) + eol;
+}
+function num(n) {
+  var s = n.toFixed(9).replace(/0+$/, '');
+  if (s.charAt(s.length - 1) === '.') s += '0';
+  return s;
+}
+
+function splitSections(P) {
+  var sec = {}, order = [];
+  for (var i = 0; i < P.length; i++) {
+    if (P[i].c === 0 && P[i].v.trim() === 'SECTION') {
+      var name = (P[i + 1] && P[i + 1].c === 2) ? P[i + 1].v.trim() : '';
+      var j = i + 2;
+      while (j < P.length && !(P[j].c === 0 && P[j].v.trim() === 'ENDSEC')) j++;
+      sec[name] = P.slice(i + 2, j);
+      order.push(name);
+      i = j;
+    }
+  }
+  sec.__order = order;
+  return sec;
+}
+
+function chunkByZero(P) {
+  var out = [], cur = null;
+  for (var i = 0; i < P.length; i++) {
+    if (P[i].c === 0) { if (cur) out.push(cur); cur = [P[i]]; }
+    else if (cur) cur.push(P[i]);
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+function val(chunk, code) {
+  for (var i = 1; i < chunk.length; i++) if (chunk[i].c === code) return chunk[i].v.trim();
+  return null;
+}
+
+/* ---------- BLOCKS ---------- */
+function parseBlocks(P) {
+  if (!P) return [];
+  var chunks = chunkByZero(P), blocks = [], cur = null;
+  for (var i = 0; i < chunks.length; i++) {
+    var t = chunks[i][0].v.trim();
+    if (t === 'BLOCK') { cur = { head: chunks[i], body: [], end: null }; blocks.push(cur); }
+    else if (t === 'ENDBLK') { if (cur) { cur.end = chunks[i]; cur = null; } }
+    else if (cur) cur.body.push(chunks[i]);
+  }
+  for (var k = 0; k < blocks.length; k++) {
+    var b = blocks[k];
+    b.name = val(b.head, 2) || '';
+    b.bx = parseFloat(val(b.head, 10) || '0') || 0;
+    b.by = parseFloat(val(b.head, 20) || '0') || 0;
+    if (!b.end) b.end = [mk(0, 'ENDBLK')];
+  }
+  return blocks;
+}
+function blockPairs(b) {
+  var out = b.head.slice();
+  for (var i = 0; i < b.body.length; i++) out = out.concat(b.body[i]);
+  return out.concat(b.end);
+}
+function hashChunks(list) {
+  var s = '', h = 5381;
+  for (var i = 0; i < list.length; i++)
+    for (var j = 0; j < list[i].length; j++) s += list[i][j].c + '\u0001' + list[i][j].v + '\u0002';
+  for (var k = 0; k < s.length; k++) { h = ((h << 5) + h + s.charCodeAt(k)) | 0; }
+  return h + ':' + s.length;
+}
+
+/* ---------- TABLES ---------- */
+function parseTables(P) {
+  if (!P) return [];
+  var chunks = chunkByZero(P), tabs = [], cur = null;
+  for (var i = 0; i < chunks.length; i++) {
+    var t = chunks[i][0].v.trim();
+    if (t === 'TABLE') { cur = { type: val(chunks[i], 2) || '', head: chunks[i], entries: [] }; tabs.push(cur); }
+    else if (t === 'ENDTAB') cur = null;
+    else if (cur) cur.entries.push({ name: (val(chunks[i], 2) || ''), chunk: chunks[i] });
+  }
+  return tabs;
+}
+
+/* ---------- μετατόπιση οντοτήτων ---------- */
+/* ποιοι κωδικοί x (10..18) είναι ΘΕΣΕΙΣ - οι υπόλοιποι είναι διανύσματα */
+var XALL = [10, 11, 12, 13, 14, 15, 16, 17, 18];
+var XONLY10 = [10];
+var POS_CODES = {
+  MTEXT: XONLY10,      // 11/21 = διάνυσμα κατεύθυνσης, ΔΕΝ μετακινείται
+  ELLIPSE: XONLY10,    // 11/21 = ημιάξονας ως προς το κέντρο
+  XLINE: XONLY10, RAY: XONLY10,
+  LWPOLYLINE: XONLY10, HATCH: XONLY10, LEADER: XONLY10, IMAGE: XONLY10,
+  POLYLINE: []         // 10/20/30 τυπικά 0 - δεν αγγίζονται
+};
+function translateChunk(chunk, dx, dy) {
+  var type = chunk[0].v.trim();
+  var allowed = POS_CODES.hasOwnProperty(type) ? POS_CODES[type] : XALL;
+  if (!allowed.length) return chunk;
+  var out = chunk.slice();
+  for (var i = 1; i < out.length; i++) {
+    var c = out[i].c;
+    if (allowed.indexOf(c) >= 0) {
+      var x = parseFloat(out[i].v);
+      if (!isNaN(x)) out[i] = mk(c, num(x + dx));
+    } else if (c >= 20 && c <= 28 && allowed.indexOf(c - 10) >= 0) {
+      var y = parseFloat(out[i].v);
+      if (!isNaN(y)) out[i] = mk(c, num(y + dy));
+    }
+  }
+  return out;
+}
+
+/* ---------- γεωμετρία: κόσμος ---------- */
+function linesOfBlock(b) {
+  var L = [];
+  for (var i = 0; i < b.body.length; i++) {
+    var ch = b.body[i];
+    if (ch[0].v.trim() !== 'LINE') continue;
+    var x1 = parseFloat(val(ch, 10)), y1 = parseFloat(val(ch, 20));
+    var x2 = parseFloat(val(ch, 11)), y2 = parseFloat(val(ch, 21));
+    if (isNaN(x1) || isNaN(y1) || isNaN(x2) || isNaN(y2)) continue;
+    L.push([x1, y1, x2, y2]);
+  }
+  return L;
+}
+
+function analyzeFile(text) {
+  var P = parsePairs(text);
+  var sec = splitSections(P);
+  var f = {
+    pairs: P, sec: sec,
+    eol: text.indexOf('\r\n') >= 0 ? '\r\n' : '\n',
+    blocks: parseBlocks(sec.BLOCKS),
+    tables: parseTables(sec.TABLES),
+    ents: chunkByZero(sec.ENTITIES || []),
+    header: sec.HEADER || []
+  };
+  f.blockByName = {};
+  for (var i = 0; i < f.blocks.length; i++) f.blockByName[f.blocks[i].name] = f.blocks[i];
+
+  /* θέσεις INSERT (top-level) */
+  f.inserts = {};
+  for (var j = 0; j < f.ents.length; j++) {
+    var ch = f.ents[j];
+    if (ch[0].v.trim() !== 'INSERT') continue;
+    var nm = val(ch, 2);
+    var x = parseFloat(val(ch, 10) || '0'), y = parseFloat(val(ch, 20) || '0');
+    if (!nm) continue;
+    (f.inserts[nm] = f.inserts[nm] || []).push([isNaN(x) ? 0 : x, isNaN(y) ? 0 : y]);
+  }
+
+  /* bbox: φέρων σκελετός (για pick point) + ΟΛΑ (για extents) */
+  var s = { minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
+  var a = { minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
+  function put(box, x, y) {
+    if (x < box.minx) box.minx = x; if (x > box.maxx) box.maxx = x;
+    if (y < box.miny) box.miny = y; if (y > box.maxy) box.maxy = y;
+  }
+  for (var b = 0; b < f.blocks.length; b++) {
+    var blk = f.blocks[b];
+    var pos = f.inserts[blk.name] || [[0, 0]];
+    var isStruct = CFG.STRUCT_RE.test(blk.name) && blk.name.indexOf('TEXT') < 0;
+    var lines = linesOfBlock(blk);
+    for (var p = 0; p < pos.length; p++) {
+      var ox = pos[p][0] - blk.bx, oy = pos[p][1] - blk.by;
+      for (var l = 0; l < lines.length; l++) {
+        var q = lines[l];
+        put(a, q[0] + ox, q[1] + oy); put(a, q[2] + ox, q[3] + oy);
+        if (isStruct) { put(s, q[0] + ox, q[1] + oy); put(s, q[2] + ox, q[3] + oy); }
+      }
+    }
+  }
+  for (var e = 0; e < f.ents.length; e++) {
+    var c2 = f.ents[e], t = c2[0].v.trim();
+    if (t === 'LINE') {
+      put(a, parseFloat(val(c2, 10)), parseFloat(val(c2, 20)));
+      put(a, parseFloat(val(c2, 11)), parseFloat(val(c2, 21)));
+      if (CFG.STRUCT_RE.test('') === false) { /* top-level lines: μόνο στα extents */ }
+    } else if (t === 'INSERT' || t === 'MTEXT' || t === 'TEXT' || t === 'CIRCLE' || t === 'ARC') {
+      var xx = parseFloat(val(c2, 10)), yy = parseFloat(val(c2, 20));
+      if (!isNaN(xx) && !isNaN(yy)) put(a, xx, yy);
+    }
+  }
+  f.structBox = isFinite(s.minx) ? s : null;
+  f.allBox = isFinite(a.minx) ? a : null;
+  f.codepage = (function () {
+    for (var i9 = 0; i9 + 1 < f.header.length; i9++)
+      if (f.header[i9].c === 9 && f.header[i9].v.trim() === '$DWGCODEPAGE') return f.header[i9 + 1].v.trim().toUpperCase();
+    return '';
+  })();
+  f.acadver = (function () {
+    for (var i2 = 0; i2 + 1 < f.header.length; i2++)
+      if (f.header[i2].c === 9 && f.header[i2].v.trim() === '$ACADVER') return f.header[i2 + 1].v.trim();
+    return '';
+  })();
+
+  /* ---- handles (R13+): εδώ τα αρχεία έχουν ΜΟΝΟ κωδικό 5, χωρίς owner refs ---- */
+  f.maxHandle = 0;
+  var hx = function (s) { var n = parseInt(String(s).trim(), 16); return isNaN(n) ? 0 : n; };
+  for (var q1 = 0; q1 < f.pairs.length; q1++) {
+    if (f.pairs[q1].c === 5 || f.pairs[q1].c === 105) {
+      var hv = hx(f.pairs[q1].v);
+      if (hv > f.maxHandle) f.maxHandle = hv;
+    }
+  }
+  f.hasHandles = f.maxHandle > 0;
+  f.tableHead = {};                       // τύπος πίνακα -> handle κεφαλίδας
+  for (var q2 = 0; q2 < f.tables.length; q2++) {
+    var th = val(f.tables[q2].head, 5);
+    if (th) f.tableHead[f.tables[q2].type] = th;
+  }
+  f.objHandles = {};                      // handles της OBJECTS (για 390/340/350)
+  var objs = sec.OBJECTS || [];
+  for (var q3 = 0; q3 < objs.length; q3++) if (objs[q3].c === 5) f.objHandles[objs[q3].v.trim().toUpperCase()] = 1;
+  return f;
+}
+
+/* ---------- κύρια συνάρτηση ---------- */
+/* items: [{name, text}]  ->  {text, report:[], warnings:[]} */
+function mergeLevels(items, cfgOverride) {
+  var cfg = {}; for (var k in CFG) cfg[k] = CFG[k];
+  if (cfgOverride) for (var k2 in cfgOverride) cfg[k2] = cfgOverride[k2];
+
+  var warnings = [], report = [], recs = [];
+
+  for (var i = 0; i < items.length; i++) {
+    var lv = parseLevelName(items[i].name);
+    if (!lv) { warnings.push('Παραλείπεται (δεν ταιριάζει με …_orN.dxf): ' + items[i].name); continue; }
+    recs.push({ name: items[i].name, prefix: lv.prefix, level: lv.level, f: analyzeFile(items[i].text) });
+  }
+  if (!recs.length) throw new Error('Κανένα αρχείο με έγκυρο όνομα στάθμης (…_or-2 … _or9).');
+
+  /* ομαδοποίηση κατά prefix - αν έχει πολλά, ενοποιούμε μόνο το πρώτο */
+  var prefixes = [];
+  for (var r = 0; r < recs.length; r++) if (prefixes.indexOf(recs[r].prefix) < 0) prefixes.push(recs[r].prefix);
+  if (prefixes.length > 1) warnings.push('Βρέθηκαν πολλά προθέματα: ' + prefixes.join(', '));
+
+  recs.sort(function (a, b) { return a.level - b.level; });
+  var levels = recs.map(function (x) { return x.level; });
+  for (var d = 1; d < levels.length; d++) {
+    if (levels[d] === levels[d - 1]) throw new Error('Διπλή στάθμη or' + levels[d] + ' - δύο αρχεία για την ίδια στάθμη.');
+    if (levels[d] !== levels[d - 1] + 1) warnings.push('Κενό στη σειρά σταθμών: μετά το or' + levels[d - 1] + ' ακολουθεί or' + levels[d] + '.');
+  }
+  /* ---- handles: ο πρώτος (χαμηλότερη στάθμη) είναι ο «οικοδεσπότης».
+         Όλων των υπολοίπων τα handles ξαναριθμούνται ώστε να μη διπλοχτυπήσουν. ---- */
+  var host = recs[0].f;
+  var hasH = host.hasHandles;
+  var seed = host.maxHandle;
+  for (var s1 = 0; s1 < recs.length; s1++) if (recs[s1].f.maxHandle > seed) seed = recs[s1].f.maxHandle;
+  var nextH = seed + 1;
+  function newHandle() { return (nextH++).toString(16).toUpperCase(); }
+  for (var s2 = 0; s2 < recs.length; s2++) recs[s2].hmap = {};
+  function remapH(rec, v) {
+    var k = String(v).trim().toUpperCase();
+    if (!rec.hmap[k]) rec.hmap[k] = newHandle();
+    return rec.hmap[k];
+  }
+  /* αντικατάσταση handles σε ένα chunk (μόνο για ΜΗ-οικοδεσπότες) */
+  function fixH(rec, chunk) {
+    if (!hasH || rec === recs[0]) return chunk;
+    var out = null;
+    for (var i7 = 0; i7 < chunk.length; i7++) {
+      if (chunk[i7].c === 5 || chunk[i7].c === 105) {
+        if (!out) out = chunk.slice();
+        out[i7] = mk(chunk[i7].c, remapH(rec, chunk[i7].v));
+      }
+    }
+    return out || chunk;
+  }
+  if (host.acadver && host.acadver !== 'AC1009' && !hasH)
+    warnings.push('Έκδοση ' + host.acadver + ' χωρίς handles - έλεγξε το αποτέλεσμα στο CAD.');
+
+  /* ---- συλλογή blocks με έλεγχο συγκρούσεων ---- */
+  var blockSeen = {};      // name -> hash
+  var outBlocks = [];      // pairs
+  for (var ri = 0; ri < recs.length; ri++) {
+    var rec = recs[ri], f = rec.f;
+    rec.rename = {};
+    for (var bi = 0; bi < f.blocks.length; bi++) {
+      var b = f.blocks[bi], h = hashChunks(f.blocks[bi].body);
+      if (blockSeen.hasOwnProperty(b.name)) {
+        if (blockSeen[b.name] === h) { b.skip = true; continue; }   // ίδιο block, γράφεται μία φορά
+        var suffix = '$L' + String(rec.level).replace('-', 'M');
+        var nn = (b.name.length + suffix.length > cfg.MAX_NAME)
+          ? b.name.slice(0, cfg.MAX_NAME - suffix.length) + suffix : b.name + suffix;
+        var g = 1; while (blockSeen.hasOwnProperty(nn)) { nn = nn.slice(0, cfg.MAX_NAME - 2) + '$' + (g++); }
+        rec.rename[b.name] = nn;
+        warnings.push('Σύγκρουση ονόματος block «' + b.name + '» (or' + rec.level + ') → μετονομάστηκε σε «' + nn + '».');
+        b.newName = nn;
+      }
+      blockSeen[b.newName || b.name] = h;
+    }
+  }
+
+  function applyRename(chunk, ren) {
+    if (chunk[0].v.trim() !== 'INSERT') return chunk;
+    var out = chunk.slice();
+    for (var i3 = 1; i3 < out.length; i3++)
+      if (out[i3].c === 2 && ren.hasOwnProperty(out[i3].v.trim())) out[i3] = mk(2, ren[out[i3].v.trim()]);
+    return out;
+  }
+
+  /* ---- blocks section ---- */
+  for (var ri2 = 0; ri2 < recs.length; ri2++) {
+    var rc = recs[ri2], hasRen = Object.keys(rc.rename).length > 0;
+    for (var bj = 0; bj < rc.f.blocks.length; bj++) {
+      var bb = rc.f.blocks[bj];
+      if (bb.skip) continue;
+      var head = fixH(rc, bb.head).slice();
+      if (bb.newName) {
+        for (var hi = 1; hi < head.length; hi++)
+          if (head[hi].c === 2 || head[hi].c === 3) head[hi] = mk(head[hi].c, bb.newName);
+      }
+      outBlocks = outBlocks.concat(head);
+      for (var bo = 0; bo < bb.body.length; bo++)
+        outBlocks = outBlocks.concat(fixH(rc, hasRen ? applyRename(bb.body[bo], rc.rename) : bb.body[bo]));
+      outBlocks = outBlocks.concat(fixH(rc, bb.end));
+    }
+  }
+
+  /* ---- tables (ένωση κατά όνομα, πρώτο κερδίζει) ---- */
+  var outTabs = [], byType = {};
+  for (var t0 = 0; t0 < recs[0].f.tables.length; t0++) {
+    var T = recs[0].f.tables[t0];
+    var copy = { type: T.type, head: T.head, entries: T.entries.slice(), seen: {} };
+    for (var q0 = 0; q0 < copy.entries.length; q0++) copy.seen[copy.entries[q0].name] = 1;
+    outTabs.push(copy); byType[T.type] = copy;
+  }
+  for (var t1 = 1; t1 < recs.length; t1++) {
+    var TT = recs[t1].f.tables, rcT = recs[t1];
+    for (var t2 = 0; t2 < TT.length; t2++) {
+      var dst = byType[TT[t2].type];
+      if (!dst) { dst = { type: TT[t2].type, head: TT[t2].head, entries: [], seen: {} }; outTabs.push(dst); byType[TT[t2].type] = dst; }
+      for (var t3 = 0; t3 < TT[t2].entries.length; t3++) {
+        var en = TT[t2].entries[t3];
+        var nm2 = en.name;
+        var chunk2 = en.chunk;
+        /* block που μετονομάστηκε -> μετονομάζεται και το BLOCK_RECORD του */
+        if (TT[t2].type === 'BLOCK_RECORD' && rcT.rename.hasOwnProperty(nm2)) {
+          nm2 = rcT.rename[nm2];
+          chunk2 = chunk2.map(function (p) { return p.c === 2 ? mk(2, nm2) : p; });
+        }
+        if (dst.seen[nm2]) continue;
+        dst.seen[nm2] = 1;
+        chunk2 = fixH(rcT, chunk2);
+        if (hasH) {
+          var ownH = host.tableHead[TT[t2].type];
+          chunk2 = chunk2.filter(function (p) {
+            /* 390 = plotstyle στην OBJECTS: κρατιέται μόνο αν υπάρχει στον οικοδεσπότη */
+            return !(p.c === 390 && !host.objHandles[p.v.trim().toUpperCase()]);
+          }).map(function (p) {
+            /* 330 = ιδιοκτήτης (η κεφαλίδα του πίνακα) -> η κεφαλίδα του οικοδεσπότη */
+            return (p.c === 330 && ownH) ? mk(330, ownH) : p;
+          });
+        }
+        dst.entries.push({ name: nm2, chunk: chunk2 });
+      }
+    }
+  }
+  /* layer τίτλων: κλώνος υπαρκτού LAYER (κρατά subclass markers/390/handle μορφή) */
+  if (cfg.TITLE) {
+    var lay = byType['LAYER'];
+    if (lay && !lay.seen[cfg.TITLE_LAYER]) {
+      lay.seen[cfg.TITLE_LAYER] = 1;
+      var tmplL = lay.entries.length ? lay.entries[0].chunk : null, chunkL, usedL = {};
+      if (tmplL) {
+        chunkL = tmplL.map(function (p) {
+          if (p.c === 2 && !usedL[2]) { usedL[2] = 1; return mk(2, cfg.TITLE_LAYER); }
+          if (p.c === 62 && !usedL[62]) { usedL[62] = 1; return mk(62, cfg.TITLE_COLOR); }
+          if (p.c === 5) return mk(5, newHandle());
+          if (p.c === 70) return mk(70, 0);
+          return p;
+        });
+      } else {
+        chunkL = [mk(0, 'LAYER'), mk(2, cfg.TITLE_LAYER), mk(70, 0), mk(62, cfg.TITLE_COLOR), mk(6, 'CONTINUOUS')];
+      }
+      lay.entries.push({ name: cfg.TITLE_LAYER, chunk: chunkL });
+    }
+  }
+
+  /* ---- πρότυπο MTEXT (κληρονομεί style/κωδικούς του σχεδίου) ---- */
+  var tmpl = null;
+  (function () {
+    for (var a1 = 0; a1 < recs.length && !tmpl; a1++) {
+      var ff = recs[a1].f;
+      for (var a2 = 0; a2 < ff.ents.length; a2++) if (ff.ents[a2][0].v.trim() === 'MTEXT') { tmpl = ff.ents[a2]; return; }
+      for (var a3 = 0; a3 < ff.blocks.length; a3++)
+        for (var a4 = 0; a4 < ff.blocks[a3].body.length; a4++)
+          if (ff.blocks[a3].body[a4][0].v.trim() === 'MTEXT') { tmpl = ff.blocks[a3].body[a4]; return; }
+    }
+  })();
+
+  /* Ο τίτλος γράφεται ως ΚΛΩΝΟΣ υπαρκτού MTEXT του σχεδίου (κληρονομεί
+     style/subclass markers/κωδικούς - ό,τι δέχεται ήδη το CAD σου).
+     Αν το σχέδιο δεν έχει MTEXT, πέφτουμε σε TEXT (R12-native, πάντα ασφαλές). */
+  /* handles (θα ήταν διπλά), επιπλέον κομμάτια κειμένου, και το διάνυσμα
+     κατεύθυνσης 11/21/31 (θα κληρονομούσε στροφή ξένου κειμένου) */
+  var DROP = { 105: 1, 330: 1, 360: 1, 3: 1, 11: 1, 21: 1, 31: 1, 62: 1 };
+  function titleEntity(x, y, txt) {
+    if (!tmpl) {
+      var style = null;
+      var st = byType['STYLE'];
+      if (st && st.entries.length) style = st.entries[0].name;
+      var th0 = [mk(0, 'TEXT')];
+      if (hasH) th0.push(mk(5, newHandle()));
+      return th0.concat([mk(8, cfg.TITLE_LAYER),
+        mk(10, num(x)), mk(20, num(y)), mk(30, '0.0'),
+        mk(40, num(cfg.TITLE_H)), mk(1, dxfText(txt, host.codepage)),
+        mk(50, '0.0'), mk(7, style || 'STANDARD'), mk(72, 0), mk(73, 0)]);
+    }
+    /* αντικατάσταση ΕΠΙ ΤΟΠΟΥ ώστε να μη χαλάσει η σειρά των group codes
+       (τα 100 subclass markers πρέπει να προηγούνται των πεδίων τους) */
+    /* canon = κανονική σειρά group codes (για τη ΘΕΣΗ όσων λείπουν)
+       ensure = μόνο αυτά προστίθενται αν λείπουν· τα υπόλοιπα (30/41/71/50)
+       γράφονται μόνο αν υπάρχουν ήδη, ώστε ο τίτλος να έχει ΑΚΡΙΒΩΣ την ίδια
+       ακολουθία κωδικών με τα MTEXT του σχεδίου. */
+    var vals = {}, used = {}, order = [5, 8, 10, 20, 30, 40, 41, 71, 50, 1];
+    var ensure = { 5: 1, 8: 1, 10: 1, 20: 1, 40: 1, 1: 1 };
+    if (hasH) vals[5] = newHandle(); else { DROP[5] = 1; delete ensure[5]; }
+    vals[8] = cfg.TITLE_LAYER; vals[10] = num(x); vals[20] = num(y); vals[30] = '0.0';
+    vals[40] = num(cfg.TITLE_H); vals[41] = num(cfg.TITLE_H * 60);
+    vals[71] = '1'; vals[50] = '0.0'; vals[1] = dxfText(txt, host.codepage);
+    var out = [mk(0, 'MTEXT')];
+    for (var i5 = 1; i5 < tmpl.length; i5++) {
+      var p = tmpl[i5];
+      if (DROP[p.c]) continue;
+      if (vals.hasOwnProperty(p.c)) {
+        if (used[p.c]) continue;                   // διπλός κωδικός -> αγνοείται
+        used[p.c] = 1; out.push(mk(p.c, vals[p.c]));
+      } else out.push(p);                          // 100 markers, 7 style, 210 κ.λπ.
+    }
+    /* Κωδικοί που λείπουν από το πρότυπο ΔΕΝ κολλάνε στο τέλος: μπαίνουν
+       στην κανονική τους θέση. (Το 30 στο τέλος έκανε αυστηρούς readers
+       να απορρίπτουν ΟΛΟ το σχέδιο: "Invalid group code 30".) */
+    for (var i6 = 0; i6 < order.length; i6++) {
+      var code = order[i6];
+      if (used[code] || !ensure[code]) continue;
+      var at = -1;
+      for (var i8 = i6 - 1; i8 >= 0 && at < 0; i8--) {          // ο προηγούμενος υπαρκτός
+        for (var i9 = out.length - 1; i9 >= 0; i9--)
+          if (out[i9].c === order[i8]) { at = i9; break; }
+      }
+      if (at >= 0) out.splice(at + 1, 0, mk(code, vals[code]));
+      else out.push(mk(code, vals[code]));
+      used[code] = 1;
+    }
+    return out;
+  }
+
+  /* ---- entities: μετατόπιση ---- */
+  var outEnts = [], ext = { minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
+  var nIn = 0, nOut = 0;
+  for (var m = 0; m < recs.length; m++) {
+    var R = recs[m], F = R.f;
+    var pick = F.structBox || F.allBox;
+    if (!pick) throw new Error('Δεν βρέθηκε γεωμετρία στο ' + R.name);
+    if (!F.structBox) warnings.push('Στο ' + R.name + ' δεν βρέθηκαν blocks φέροντος σκελετού - το pick point υπολογίστηκε από όλη τη γεωμετρία.');
+    var ty = (R.level - cfg.BASE_LEVEL) * cfg.STEP_Y;
+    var dx = cfg.BASE_X - pick.maxx, dy = ty - pick.miny;
+    var hasRen2 = Object.keys(R.rename).length > 0;
+
+    for (var n = 0; n < F.ents.length; n++) {
+      var ch2 = F.ents[n];
+      if (ch2[0].v.trim() === 'ENDSEC' || ch2[0].v.trim() === 'EOF') continue;
+      nIn++;
+      var mv = translateChunk(fixH(R, hasRen2 ? applyRename(ch2, R.rename) : ch2), dx, dy);
+      outEnts = outEnts.concat(mv); nOut++;
+    }
+    var ab = F.allBox || pick;
+    if (ab.minx + dx < ext.minx) ext.minx = ab.minx + dx;
+    if (ab.miny + dy < ext.miny) ext.miny = ab.miny + dy;
+    if (ab.maxx + dx > ext.maxx) ext.maxx = ab.maxx + dx;
+    if (ab.maxy + dy > ext.maxy) ext.maxy = ab.maxy + dy;
+
+    var title = levelTitle(R.level, levels);
+    if (cfg.TITLE) {
+      var tx = pick.minx + dx, tyy = ty + cfg.TITLE_DY;
+      outEnts = outEnts.concat(titleEntity(tx, tyy, title));
+      if (tyy - cfg.TITLE_H < ext.miny) ext.miny = tyy - cfg.TITLE_H;
+    }
+    report.push({
+      file: R.name, level: R.level, title: title,
+      pick: [pick.maxx, pick.miny], target: [cfg.BASE_X, ty],
+      delta: [dx, dy], entities: F.ents.length, blocks: F.blocks.length
+    });
+  }
+
+  /* ---- header ---- */
+  var head = recs[0].f.header.slice();
+  function setVar(name, x, y) {
+    for (var i4 = 0; i4 + 3 < head.length; i4++) {
+      if (head[i4].c === 9 && head[i4].v.trim() === name) {
+        for (var j4 = i4 + 1; j4 < Math.min(i4 + 5, head.length); j4++) {
+          if (head[j4].c === 10) head[j4] = mk(10, num(x));
+          if (head[j4].c === 20) head[j4] = mk(20, num(y));
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  var pad = 5.0;
+  setVar('$EXTMIN', ext.minx - pad, ext.miny - pad);
+  setVar('$EXTMAX', ext.maxx + pad, ext.maxy + pad);
+  setVar('$LIMMIN', ext.minx - pad, ext.miny - pad);
+  setVar('$LIMMAX', ext.maxx + pad, ext.maxy + pad);
+
+  /* ---- συναρμολόγηση ---- */
+  var P = [];
+  function section(name, body) {
+    P.push(mk(0, 'SECTION')); P.push(mk(2, name));
+    P = P.concat(body);
+    P.push(mk(0, 'ENDSEC'));
+  }
+  if (hasH) {
+    for (var hs = 0; hs + 1 < head.length; hs++)
+      if (head[hs].c === 9 && head[hs].v.trim() === '$HANDSEED' && head[hs + 1].c === 5)
+        head[hs + 1] = mk(5, (nextH + 16).toString(16).toUpperCase());
+  }
+  section('HEADER', head);
+  if (host.sec.CLASSES && host.sec.CLASSES.length) section('CLASSES', host.sec.CLASSES);
+  var tbody = [];
+  for (var w = 0; w < outTabs.length; w++) {
+    var TB = outTabs[w], hd = TB.head.slice();
+    for (var w2 = 1; w2 < hd.length; w2++) if (hd[w2].c === 70) hd[w2] = mk(70, TB.entries.length);
+    tbody = tbody.concat(hd);
+    for (var w3 = 0; w3 < TB.entries.length; w3++) tbody = tbody.concat(TB.entries[w3].chunk);
+    tbody.push(mk(0, 'ENDTAB'));
+  }
+  section('TABLES', tbody);
+  section('BLOCKS', outBlocks);
+  section('ENTITIES', outEnts);
+  if (host.sec.OBJECTS && host.sec.OBJECTS.length) section('OBJECTS', host.sec.OBJECTS);
+  P.push(mk(0, 'EOF'));
+
+  return {
+    text: ser(P, recs[0].f.eol),
+    report: report, warnings: warnings,
+    counts: { entitiesIn: nIn, entitiesOut: nOut, titles: cfg.TITLE ? recs.length : 0 },
+    extents: ext
+  };
+}
+
+var API = {
+  CFG: CFG, mergeLevels: mergeLevels, parseLevelName: parseLevelName,
+  levelTitle: levelTitle, bytesToStr: bytesToStr, strToBytes: strToBytes,
+  _analyze: analyzeFile, _parsePairs: parsePairs, _splitSections: splitSections,
+  _chunkByZero: chunkByZero
+};
+if (typeof module !== 'undefined' && module.exports) module.exports = API;
+global.DXFMERGE = API;
+})(typeof self !== 'undefined' ? self : this);
+
+
+
+
+/* ==================================================================== */
 const workerCode = `
   const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
   postMessage({type:"log", s:"[boot] Κατέβασμα Pyodide runtime…"});
@@ -1644,10 +2327,11 @@ const workerCode = `
   };
 `;
 const worker = new Worker(URL.createObjectURL(new Blob([workerCode], {type:"application/javascript"})));
-let sawZero = false;
+
 worker.onerror = e => {
   busy(false, '<span class="bad">Σφάλμα στο περιβάλλον εκτέλεσης — δες το log.</span>');
   log("[worker error] " + (e.message || e.type) + (e.filename ? " @ " + e.filename + ":" + e.lineno : ""));
+  if (pending) { const p = pending; pending = null; p.rej(new Error("worker error")); }
 };
 worker.onmessageerror = e => log("[worker messageerror] " + e);
 
@@ -1656,67 +2340,173 @@ worker.onmessage = ev => {
   if (m.type === "log") { log(m.s); if (m.s.includes("AUDIT_TOTAL 0")) sawZero = true; }
   else if (m.type === "ready") {
     workerReady = true; phase(0, "done");
-    busy(false, "Έτοιμο. " + (dxfBuf ? "Πάτησε Εκτέλεση." : "Διάλεξε αρχείο DXF."));
+    busy(false, "Έτοιμο. " + (queue.length ? "Πάτησε Εκτέλεση." : "Ρίξε ένα ή περισσότερα DXF."));
     maybeEnable();
   }
-  else if (m.type === "phase") { phase(m.i-1, "done"); phase(m.i, "on"); 
-    busy(true, ["","Ανάγνωση σχεδίου…","Τακτοποίηση κειμένων… (τα μεγάλα σχέδια θέλουν λεπτά)","Ανεξάρτητος έλεγχος…"][m.i]); }
-  else if (m.type === "done") {
-    phase(3, "done");
-    const blob = new Blob([m.out], {type:"application/dxf"});
-    const a = $("dl");
-    a.href = URL.createObjectURL(blob);
-    a.download = dxfName.replace(/\.dxf$/i,"") + "_tidied.dxf";
-    a.style.display = "inline-block";
-    $("audit").className = sawZero ? "ok" : "bad";
-    $("audit").textContent = sawZero ? "AUDIT_TOTAL 0 ✓" : "ΔΕΝ ΕΙΝΑΙ 0 — δες log";
-    busy(false, sawZero ? '<span class="ok">AUDIT_TOTAL 0 ✓ Κατέβασε το αρχείο και άνοιξέ το με το CAD σου — στον browser τα DXF φαίνονται ως κείμενο.</span>'
-                        : '<span class="bad">Ολοκληρώθηκε, αλλά το audit ΔΕΝ είναι 0 — δες το log.</span>');
-    $("run").disabled = false;
-  }
-  else if (m.type === "error") {
-    busy(false, '<span class="bad">Σφάλμα — δες το log.</span>');
-    log(m.s); $("run").disabled = false;
-  }
+  else if (m.type === "phase") { phase(m.i-1, "done"); phase(m.i, "on"); }
+  else if (m.type === "done") { const p = pending; pending = null; if (p) p.res(new Uint8Array(m.out)); }
+  else if (m.type === "error") { log(m.s); const p = pending; pending = null; if (p) p.rej(new Error(m.s)); }
 };
 
 busy(true, "Φόρτωση περιβάλλοντος Python… (10-30 δευτερόλεπτα την πρώτη φορά)");
 phase(0, "on");
 worker.postMessage({type:"init", b64: PIPELINE_B64});
 
+/* ---------------- είσοδος αρχείων ---------------- */
 const drop = $("drop");
 drop.addEventListener("click", () => $("file").click());
 $("pick").addEventListener("click", ev => { ev.stopPropagation(); $("file").click(); });
 ["dragover","dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("hover"); }));
 ["dragleave","drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("hover"); }));
-drop.addEventListener("drop", ev => { const f = ev.dataTransfer.files[0]; if (f) takeFile(f); });
-$("file").addEventListener("change", ev => { const f = ev.target.files[0]; if (f) takeFile(f); });
+drop.addEventListener("drop", ev => takeFiles(ev.dataTransfer.files));
+$("file").addEventListener("change", ev => { takeFiles(ev.target.files); ev.target.value = ""; });
+$("clear").addEventListener("click", ev => { ev.stopPropagation(); queue = []; renderList(); maybeEnable(); });
 
-async function takeFile(f) {
-  dxfBuf = await f.arrayBuffer();
-  dxfName = f.name;
-  drop.classList.add("hasfile"); $("tb-file").textContent = f.name;
-  $("finfo").textContent = "✔ " + f.name + " — " + (dxfBuf.byteLength/1024).toFixed(0) + " KB";
-  $("dl").style.display = "none";
-  if (workerReady) busy(false, "Έτοιμο. Πάτησε Εκτέλεση.");
+const LEVEL_Y = n => (n + 2) * 50;
+
+function takeFiles(list) {
+  if (running) { log("Τρέχει ήδη μια παρτίδα — περίμενε να τελειώσει."); return; }
+  let added = 0, skipped = [];
+  for (const f of list || []) {
+    if (!/\.dxf$/i.test(f.name)) { skipped.push(f.name); continue; }
+    if (queue.some(q => q.name === f.name)) continue;
+    const lv = DXFMERGE.parseLevelName(f.name);
+    queue.push({ name: f.name, file: f, level: lv ? lv.level : null,
+                 prefix: lv ? lv.prefix : null, status: "αναμονή", out: null, audit: null });
+    added++;
+  }
+  queue.sort((a, b) => (a.level === null ? 999 : a.level) - (b.level === null ? 999 : b.level));
+  if (skipped.length) log("Παραλείφθηκαν (όχι .dxf): " + skipped.join(", "));
+  const noLevel = queue.filter(q => q.level === null);
+  if (noLevel.length) log("⚠ Δεν αναγνωρίστηκε στάθμη (χρειάζεται όνομα …_orN.dxf): " +
+                          noLevel.map(q => q.name).join(", ") + " — θα τακτοποιηθούν αλλά ΔΕΝ θα μπουν στο ενοποιημένο.");
+  drop.classList.toggle("hasfile", queue.length > 0);
+  renderList();
+  if (workerReady && !running) busy(false, queue.length ? "Έτοιμο — " + queue.length + " αρχεία. Πάτησε Εκτέλεση." : "Ρίξε ένα ή περισσότερα DXF.");
   maybeEnable();
 }
-function maybeEnable() { $("run").disabled = !(workerReady && dxfBuf); }
 
-$("run").addEventListener("click", () => {
-  $("run").disabled = true; sawZero = false;
+function levelLabel(q) {
+  if (q.level === null) return "—";
+  const levels = queue.filter(x => x.level !== null).map(x => x.level);
+  return "or" + q.level + " · y=" + LEVEL_Y(q.level) + " · " + DXFMERGE.levelTitle(q.level, levels);
+}
+
+function renderList() {
+  const box = $("flist");
+  if (!queue.length) { box.innerHTML = '<div class="fl-empty">κανένα αρχείο</div>'; $("tb-file").textContent = "—"; return; }
+  $("tb-file").textContent = queue.length + " αρχεία" + (queue[0].prefix ? " · " + queue[0].prefix : "");
+  box.innerHTML = queue.map((q, i) => {
+    const cls = q.status.indexOf("ΟΚ") === 0 ? "ok" : (q.status.indexOf("ΣΦΑΛΜΑ") === 0 || q.status.indexOf("ΠΡΟΣΟΧΗ") === 0 ? "bad" : "");
+    return '<div class="fl-row"><div class="fl-n">' + q.name + '</div>' +
+           '<div class="fl-l">' + levelLabel(q) + '</div>' +
+           '<div class="fl-s ' + cls + '" id="fs' + i + '">' + q.status + '</div>' +
+           '<div class="fl-d" id="fd' + i + '"></div></div>';
+  }).join("");
+  queue.forEach((q, i) => {
+    if (!q.out) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([q.out], { type: "application/dxf" }));
+    a.download = q.name.replace(/\.dxf$/i, "") + "_tidied.dxf";
+    a.textContent = "⬇";
+    a.title = "Κατέβασμα τακτοποιημένου";
+    $("fd" + i).appendChild(a);
+  });
+}
+
+function maybeEnable() { $("run").disabled = !(workerReady && queue.length && !running); }
+
+/* ---------------- εκτέλεση παρτίδας ---------------- */
+function runOne(buf) {
+  return new Promise((res, rej) => { pending = { res, rej }; worker.postMessage({ type: "run", buf }, [buf]); });
+}
+
+$("run").addEventListener("click", runAll);
+
+async function runAll() {
+  if (running || !queue.length) return;
+  running = true; maybeEnable();
   $("dl").style.display = "none";
-  phase(1,"on"); phase(2,""); phase(3,"");
-  log("=== ΕΚΤΕΛΕΣΗ: " + dxfName + " ===");
-  const copy = dxfBuf.slice(0);
-  worker.postMessage({type:"run", buf: copy}, [copy]);
-});
+  $("audit").className = ""; $("audit").textContent = "σε εξέλιξη";
+  const T0 = Date.now();
+  let okCount = 0;
 
-// ΚΡΙΣΙΜΟ: αν το αρχείο πέσει ΕΚΤΟΣ ζώνης, ο browser ΕΓΚΑΤΑΛΕΙΠΕΙ τη σελίδα
-// και ανοίγει το DXF ως κείμενο (αυτό έβλεπες). Πλέον ΟΛΗ η σελίδα δέχεται
-// τη ρίψη και τη δρομολογεί στη ζώνη - πουθενά πλοήγηση.
+  for (let i = 0; i < queue.length; i++) {
+    const q = queue[i];
+    phase(1, "on"); phase(2, ""); phase(3, "");
+    q.status = "τρέχει…"; renderList();
+    busy(true, "[" + (i+1) + "/" + queue.length + "] " + q.name + " — τακτοποίηση… (τα μεγάλα σχέδια θέλουν λεπτά)");
+    log("\n=== [" + (i+1) + "/" + queue.length + "] ΕΚΤΕΛΕΣΗ: " + q.name + " ===");
+    sawZero = false;
+    try {
+      const buf = await q.file.arrayBuffer();
+      const out = await runOne(buf);
+      q.out = out; q.audit = sawZero;
+      q.status = sawZero ? "ΟΚ · audit 0" : "ΠΡΟΣΟΧΗ · audit ≠ 0";
+      if (sawZero) okCount++;
+      phase(3, "done");
+    } catch (e) {
+      q.status = "ΣΦΑΛΜΑ"; q.out = null;
+      log("✗ " + q.name + ": " + (e.message || e));
+    }
+    renderList();
+  }
+
+  const dt = ((Date.now() - T0) / 60000).toFixed(1);
+  log("\n===== ΣΥΓΚΕΝΤΡΩΤΙΚΑ =====");
+  queue.forEach(q => log("  " + q.name.padEnd(34) + (q.status === "ΟΚ · audit 0" ? "✓" : "✗ " + q.status)));
+  log("Σύνολο: " + queue.length + " αρχεία σε " + dt + " λεπτά — " + okCount + " καθαρά (AUDIT_TOTAL 0).");
+
+  $("audit").className = okCount === queue.length ? "ok" : "bad";
+  $("audit").textContent = okCount + "/" + queue.length + " με AUDIT_TOTAL 0";
+
+  mergeAll();
+  running = false; maybeEnable();
+}
+
+/* ---------------- ένωση σε ΕΝΑ DXF ---------------- */
+function mergeAll() {
+  const items = queue.filter(q => q.out && q.level !== null);
+  if (!items.length) {
+    busy(false, '<span class="bad">Κανένα αρχείο δεν ολοκληρώθηκε — δες το log.</span>');
+    return;
+  }
+  log("\n===== ΕΝΟΠΟΙΗΣΗ ΣΤΑΘΜΩΝ =====");
+  let res;
+  try {
+    res = DXFMERGE.mergeLevels(items.map(q => ({ name: q.name, text: DXFMERGE.bytesToStr(q.out) })));
+  } catch (e) {
+    log("✗ Η ένωση απέτυχε: " + (e.message || e));
+    busy(false, '<span class="bad">Τα επιμέρους αρχεία είναι έτοιμα, αλλά η ένωση απέτυχε — δες το log.</span>');
+    return;
+  }
+  res.report.forEach(r => log(
+    "  or" + String(r.level).padStart(2) + "  " + r.title.padEnd(34) +
+    " pick(" + r.pick[0].toFixed(2) + ", " + r.pick[1].toFixed(2) + ")" +
+    " → (" + r.target[0].toFixed(1) + ", " + r.target[1].toFixed(1) + ")" +
+    "  μετατόπιση (" + r.delta[0].toFixed(2) + ", " + r.delta[1].toFixed(2) + ")"));
+  res.warnings.forEach(w => log("  ⚠ " + w));
+  log("  Οντότητες: " + res.counts.entitiesOut + " (από " + res.counts.entitiesIn + ") + " +
+      res.counts.titles + " τίτλοι στάθμης.");
+  if (res.counts.entitiesIn !== res.counts.entitiesOut) log("  ⚠ ΔΙΑΦΟΡΑ ΣΤΟ ΠΛΗΘΟΣ ΟΝΤΟΤΗΤΩΝ — έλεγξέ το.");
+
+  const prefix = (items[0].prefix || "ktirio");
+  const blob = new Blob([DXFMERGE.strToBytes(res.text)], { type: "application/dxf" });
+  const a = $("dl");
+  a.href = URL.createObjectURL(blob);
+  a.download = prefix + "_ΕΝΟΠΟΙΗΜΕΝΟ.dxf";
+  a.style.display = "inline-block";
+  const okAll = queue.every(q => q.status === "ΟΚ · audit 0");
+  busy(false, (okAll ? '<span class="ok">Όλα καθαρά (AUDIT_TOTAL 0). ' : '<span class="bad">Ολοκληρώθηκε με επιφυλάξεις — δες το log. ')
+    + 'Το ενοποιημένο DXF έχει ' + items.length + ' στάθμες, ανά 50 μονάδες στον άξονα y.</span>');
+}
+
+/* ΚΡΙΣΙΜΟ: αν το αρχείο πέσει ΕΚΤΟΣ ζώνης, ο browser ΕΓΚΑΤΑΛΕΙΠΕΙ τη σελίδα
+   και ανοίγει το DXF ως κείμενο. Πλέον ΟΛΗ η σελίδα δέχεται τη ρίψη. */
 ["dragover","drop"].forEach(e => window.addEventListener(e, ev => ev.preventDefault()));
-window.addEventListener("drop", ev => { const f = ev.dataTransfer && ev.dataTransfer.files[0]; if (f) takeFile(f); });
+window.addEventListener("drop", ev => { if (ev.dataTransfer) takeFiles(ev.dataTransfer.files); });
+
+renderList();
 
 </script>
 </body>
