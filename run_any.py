@@ -4,7 +4,8 @@ import re, sys, time
 from pipeline_v11 import process_all
 from beambar_engine import get_inserts
 from patcher import patch_dxf, patch_block_mtext
-from patch_slab_marker import patch_slab_marker_geometry
+from patch_slab_marker import patch_slab_marker_geometry, swap_marker_name_height, collapse_bar_geometry
+import pipeline_v11 as _P
 from patch_style import patch_layer_colors, patch_style
 from analyze import get_all_blocks, entities_from_pairs, to_dict
 import pickle
@@ -32,6 +33,13 @@ for name,(dx,dy) in text_local_final.items():
 patch_block_mtext('_s1.dxf','_s2.dxf', blo)
 md = {n:(dx,dy) for n,(dx,dy) in text_local_final.items() if re.match(r'FL-?\d+_SLAB\d+$',n)}
 patch_slab_marker_geometry('_s2.dxf','_s3.dxf', md)
+nsw = swap_marker_name_height('_s3.dxf','_s3.dxf')
+print(f'MARKER FORMAT: {nsw} δείκτες σε μορφή «Π πάνω / h= κάτω»')
 patch_layer_colors('_s3.dxf','_s4.dxf')
 patch_style('_s4.dxf', out_path, hatch_scale=0.02, orig_hatch_scale=0.1)
+if _P.COLLAPSE_BARS:
+    _nc = collapse_bar_geometry(out_path, set(_P.COLLAPSE_BARS))
+    print('HAIRPIN COLLAPSE: %s (%d γραμμές στην ευθεία)' % (sorted(_P.COLLAPSE_BARS), _nc))
+else:
+    print('HAIRPIN COLLAPSE: κανένα')
 print('DONE %.1fs'%(time.time()-t0))

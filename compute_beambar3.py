@@ -1,4 +1,5 @@
 import re, math
+from analyze import entities_from_pairs
 from engine import load_all, block_lines_local, has_diagonal
 
 TARGET_GAP = 0.12
@@ -105,12 +106,57 @@ def compute_beambar_offsets(input_path):
                     align = hook_dir[0]*to_beam_n[0] + hook_dir[1]*to_beam_n[1]
                     hook_bonus = -0.3*align
             return dist + (1.0-overlap_frac)*2.0 + hook_bonus
+        # ΚΑΝΟΝΑΣ ΜΗΧΑΝΙΚΟΥ (διατομές): δοκός Π/Υ σε εκ. Το ΚΑΤΑΚΟΡΥΦΟ
+        # σκέλος του οπλισμού δοκού είναι λίγο μικρότερο αλλά ΚΟΝΤΙΝΟ στο
+        # ύψος Υ (π.χ. Υ=60 -> σκέλος ~45, σίγουρα όχι 15· Υ=20 -> ~10,
+        # σίγουρα όχι 45). Το μήκος του σκέλους ΞΕΧΩΡΙΖΕΙ σε ποια δοκό
+        # ανήκει η ράβδος (BEAMBAR8 σκέλος 14εκ -> Δ13.1 ύψους 25, ΟΧΙ
+        # Δ4.1 ύψους 50· BEAMBAR48 σκέλος 35εκ -> Δ4.1, ΟΧΙ Δ13.1).
+        _hook = 0.0
+        for sx1, sy1, sx2, sy2 in lines:
+            _l = ((sx2-sx1)**2 + (sy2-sy1)**2) ** 0.5
+            if _l < 1e-9 or abs(_l - L) < 1e-9:
+                continue
+            if abs(((sx2-sx1)*ux + (sy2-sy1)*uy)/_l) < 0.5:
+                _hook = max(_hook, _l)
+        if _hook > 0.02:
+            _compat = []
+            for _cnd in candidates:
+                _bn2 = _cnd[1]
+                _m2 = re.match(r'(FL-?\d+_)BEAM(\d+)$', _bn2)
+                _H = None
+                if _m2:
+                    _btn2 = _m2.group(1) + 'BEAM_TEXT' + _m2.group(2)
+                    if _btn2 in blocks:
+                        _txt2 = ' '.join(str(p[1]) for e2 in entities_from_pairs(blocks[_btn2])
+                                          if e2[0][1] == 'MTEXT'
+                                          for p in e2 if p[0] == 1)
+                        _mh = re.search(r'(\d+)\s*/\s*(\d+)', _txt2)
+                        if _mh:
+                            _H = float(_mh.group(2)) / 100.0
+                if _H is None:
+                    _compat.append(_cnd)
+                    continue
+                if 0.35*_H - 0.03 <= _hook <= _H + 0.03:
+                    _compat.append(_cnd)
+            if _compat:
+                candidates = _compat
         candidates.sort(key=combined_score)
         best = candidates[0]
         score, bname, segs, dist, overlap_frac = best
 
         bar_perp = spine_mid[0]*nx+spine_mid[1]*ny
-        edge_perps = [sx1*nx+sy1*ny for sx1,sy1,sx2,sy2 in segs]
+        # ΜΟΝΟ οι ΠΑΡΑΛΛΗΛΕΣ στη ράβδο πλευρές (παρειές) είναι στόχος του snap.
+        # Τα κάθετα «καπάκια» των άκρων έδιναν ψευδο-κοντινό perp και το σίδερο
+        # έμενε μακριά από τη δοκό του (BEAMBAR63/47/52/34/13 στο pogon).
+        import math as _m
+        _par = []
+        for sx1,sy1,sx2,sy2 in segs:
+            _sl = _m.hypot(sx2-sx1, sy2-sy1)
+            if _sl < 1e-9: continue
+            if abs(((sx2-sx1)*ux + (sy2-sy1)*uy)/_sl) > 0.94:
+                _par.append((sx1,sy1,sx2,sy2))
+        edge_perps = [sx1*nx+sy1*ny for sx1,sy1,sx2,sy2 in (_par or segs)]
         nearest_edge_perp = min(edge_perps, key=lambda e: abs(e-bar_perp))
         sign = 1 if nearest_edge_perp > bar_perp else -1
         target_perp = nearest_edge_perp - sign*TARGET_GAP

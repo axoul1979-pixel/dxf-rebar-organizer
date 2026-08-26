@@ -50,7 +50,11 @@ for n in blocks:
             if (bmid(nx0,ny0)-ref)*(bmid(dx,dy)-ref) < 0: flips.append((n,'άξονας',m.group(1)))
     pts=[(p[0]+nx0,p[1]+ny0) for l_ in mylines for p in [(l_[0],l_[1]),(l_[2],l_[3])]]
     ts=[p[0]*ux+p[1]*uy for p in pts]; lo,hi=min(ts),max(ts)
-    for t,cx,cy in bt_centers:
+    _own_bt_v = None
+    _mv = re.search(r'beam=(FL-?\d+_)BEAM(\d+)\b', debug.get(n,'') or '')
+    if _mv:
+        _own_bt_v = _mv.group(1)+'BEAM_TEXT'+_mv.group(2)
+    for t,cx,cy in ():  # text-side εκτός: «ΠΡΩΤΑ κοντά στο δοκάρι» - μόνο ο άξονας ελέγχεται
         tal=cx*ux+cy*uy
         if tal<lo-0.3 or tal>hi+0.3: continue
         tp=cx*pnx+cy*pny

@@ -193,6 +193,56 @@ def is_ok_relaxed(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes
     crossed = count_line_crossings_geom(boxes_local, dx, dy, obstacle_lines, exclude_line_names)
     return len(crossed) <= max_crossings
 
+def is_ok_tight(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes, exclude_line_names=(),
+                 max_row_crossings=0):
+    """ΕΞΑΙΡΕΣΗ ΣΤΕΝΟΤΗΤΑΣ (εγκεκριμένη από τον μηχανικό, αναιρέσιμη):
+    όταν κοντινή θέση δεν περνά το πλήρες/χαλαρό κριτήριο, επιτρέπεται θέση
+    όπου γραμμές πέφτουν ΜΟΝΟ στα κενά ανάμεσα στις σειρές των γραμμάτων:
+    κάθε ΣΕΙΡΑ κειμένου καθαρή από γραμμές ΚΑΙ διαγράμμιση· κείμενα/κύκλοι
+    αυστηρά όπως πάντα (μηδέν επικαλύψεις)."""
+    from hatch_engine import bbox_poly_overlap
+    _row_owners = set()
+    for x, y, w, h, rot in boxes_local:
+        bx = text_bbox(x+dx, y+dy, w, h, rot)
+        for poly, pname in hatch_polys:
+            if pname in exclude_line_names:
+                continue
+            if bbox_poly_overlap(bx, poly):
+                return False
+        for pb in placed_boxes:
+            if not (bx[2] + MIN_TEXT_GAP < pb[0] or pb[2] + MIN_TEXT_GAP < bx[0] or
+                    bx[3] + MIN_TEXT_GAP < pb[1] or pb[3] + MIN_TEXT_GAP < bx[1]):
+                return False
+        p_ = 0.015
+        c0, c1, c2, c3 = bx[0]+p_, bx[1]+p_, bx[2]-p_, bx[3]-p_
+        if c2 > c0 and c3 > c1:
+            for seg in obstacle_lines:
+                x1_, y1_, x2_, y2_ = seg[0], seg[1], seg[2], seg[3]
+                _own_s = seg[4] if len(seg) > 4 else None
+                if _own_s in exclude_line_names:
+                    continue
+                if max(x1_,x2_) < c0 or min(x1_,x2_) > c2 or max(y1_,y2_) < c1 or min(y1_,y2_) > c3:
+                    continue
+                _hit_s = False
+                if (c0 <= x1_ <= c2 and c1 <= y1_ <= c3) or (c0 <= x2_ <= c2 and c1 <= y2_ <= c3):
+                    _hit_s = True
+                else:
+                    ddx_, ddy_ = x2_-x1_, y2_-y1_
+                    for ex1, ey1, ex2, ey2 in ((c0,c1,c2,c1),(c0,c3,c2,c3),(c0,c1,c0,c3),(c2,c1,c2,c3)):
+                        fx_, fy_ = ex2-ex1, ey2-ey1
+                        den = ddx_*fy_ - ddy_*fx_
+                        if abs(den) < 1e-12:
+                            continue
+                        t_ = ((ex1-x1_)*fy_ - (ey1-y1_)*fx_)/den
+                        u_ = ((ex1-x1_)*ddy_ - (ey1-y1_)*ddx_)/den
+                        if 0 <= t_ <= 1 and 0 <= u_ <= 1:
+                            _hit_s = True; break
+                if _hit_s:
+                    _row_owners.add(_own_s if _own_s is not None else id(seg))
+                    if len(_row_owners) > max_row_crossings:
+                        return False
+    return True
+
 def is_ok_full(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes, exclude_line_names=(),
                strict_line_names=None):
     if strict_line_names is None:
@@ -290,6 +340,30 @@ def text_only_slide(name, blocks, base_dx, base_dy, obstacle_lines, hatch_polys,
                 return tdx, tdy, True
     return 0.0, 0.0, False
 
+COLLAPSE_BARS = set()    # ΕΦΕΔΡΕΙΑ ΦΟΥΡΚΕΤΑΣ (εγκεκριμένη): ράβδοι με άγκιστρα/
+                         # φουρκέτες στα ΔΥΟ άκρα των οποίων τα σκέλη κόβουν
+                         # γειτονικά κείμενα και ΚΑΜΙΑ νόμιμη κίνηση δεν λύνει -
+                         # η γεωμετρία τους καταρρέει πάνω στη γραμμή-κορμό
+                         # (ίδιο κείμενο, ίδιες οντότητες, απλή γραμμή).
+
+def _collapse_lines(lines):
+    """Προβολή όλων των τμημάτων μιας ράβδου πάνω στον άξονα του κορμού της."""
+    mb=None; mbl=-1.0
+    for x1,y1,x2,y2 in lines:
+        l = math.hypot(x2-x1, y2-y1)
+        if l > mbl: mbl = l; mb = (x1,y1,x2,y2)
+    if mb is None or mbl < 1e-9:
+        return lines
+    ux,uy = (mb[2]-mb[0])/mbl, (mb[3]-mb[1])/mbl
+    nx,ny = -uy, ux
+    bx,by = mb[0], mb[1]
+    out=[]
+    for x1,y1,x2,y2 in lines:
+        d1 = (x1-bx)*nx + (y1-by)*ny
+        d2 = (x2-bx)*nx + (y2-by)*ny
+        out.append((x1-d1*nx, y1-d1*ny, x2-d2*nx, y2-d2*ny))
+    return out
+
 SLAB_POLYS_MAP = {}      # bbox πλακών (από get_slab_polys), γεμίζει στο process_all
 
 def _marker_move_ok(sname, ddx, ddy):
@@ -380,7 +454,7 @@ def _beambar_side_ok(name, lines, ndx, ndy):
         # παρειά του. Επιτρεπόμενο: η βασική (snap) απόσταση + 0.35μ ανοχή.
         if abs(d) > max_dist:
             return False
-    for nx_, ny_, t_perp, side in BEAMBAR_TEXT_SIDE.get(name, ()):
+    for _tn_, nx_, ny_, t_perp, side in BEAMBAR_TEXT_SIDE.get(name, ()):
         if ((mx*nx_ + my*ny_) - t_perp)*side <= 1e-6:
             return False
     return True
@@ -744,7 +818,7 @@ def process_all(input_path, is_training_file=False):
         if not _bl:
             continue
         _ub = union_bbox(_bl)
-        _bt_centers.append(((_ub[0]+_ub[2])/2, (_ub[1]+_ub[3])/2))
+        _bt_centers.append((_btn, (_ub[0]+_ub[2])/2, (_ub[1]+_ub[3])/2))
     for name,(bdx,bdy) in beam_res.items():
         if bdx <= -49:
             continue
@@ -762,14 +836,14 @@ def process_all(input_path, is_training_file=False):
             mid0 = _bar_mid(my_lines0, 0.0, 0.0)
             bar_perp0 = mid0[0]*mnx + mid0[1]*mny
             sides = []
-            for cx_, cy_ in _bt_centers:
+            for tname, cx_, cy_ in _bt_centers:
                 t_al = cx_*mux + cy_*muy
                 if t_al < lo0-0.3 or t_al > hi0+0.3:
                     continue
                 t_perp = cx_*mnx + cy_*mny
                 d0 = bar_perp0 - t_perp
                 if abs(d0) > 1e-6:
-                    sides.append((mnx, mny, t_perp, 1 if d0 > 0 else -1))
+                    sides.append((tname, mnx, mny, t_perp, 1 if d0 > 0 else -1))
             if sides:
                 BEAMBAR_TEXT_SIDE[name] = sides
         m = re.search(r'beam=(\S+)', beambar_debug.get(name,'') or '')
@@ -807,7 +881,10 @@ def process_all(input_path, is_training_file=False):
         # νόμιμη θέση. Το ίδιο πρόσημο (side) παραμένει η αυθεντία.
         mx0 = (mbest[0]+mbest[2])/2; my0 = (mbest[1]+mbest[3])/2
         d_phys = (mx0*nx_ + my0*ny_) - ref_perp
-        BEAMBAR_SIDE[name] = (nx_, ny_, ref_perp, side, max(abs(d), abs(d_phys)) + 0.35)
+        # «ΚΟΝΤΑ στο ΔΟΚΑΡΙ»: η ζώνη της ράβδου ορίζεται από το ΚΟΥΜΠΩΜΑ
+        # (snap±0.35) - η μακρινή φυσική θέση ΔΕΝ διευρύνει πια τη ζώνη,
+        # ώστε κανένα πέρασμα να μην μπορεί να στείλει το σίδερο πίσω.
+        BEAMBAR_SIDE[name] = (nx_, ny_, ref_perp, side, abs(d) + 0.35)
 
     # ΕΠΙΚΥΡΩΣΗ ΤΗΣ ΙΔΙΑΣ ΤΗΣ ΒΑΣΙΚΗΣ (matched/snap) ΘΕΣΗΣ ως προς το μόλις
     # κλειδωμένο BEAMBAR_TEXT_SIDE (φυσική θέση). Όταν η ράβδος βρίσκεται
@@ -824,10 +901,31 @@ def process_all(input_path, is_training_file=False):
         if not my_lines1 or _beambar_side_ok(name, my_lines1, bdx, bdy):
             continue
         ok_pos = None
-        for frac in (0.9, 0.75, 0.6, 0.45, 0.3, 0.15, 0.0):
+        # ΚΑΝΟΝΑΣ ΜΗΧΑΝΙΚΟΥ («ΠΡΩΤΑ ΑΠ' ΟΛΑ κοντά στο ΔΟΚΑΡΙ»): το πλήρες
+        # κούμπωμα στη δοκό προηγείται. Η πλευρά επικυρώνεται ΜΟΝΟ ως προς
+        # το κείμενο της ΔΙΚΗΣ του δοκού (ίδιος αριθμός) και τον άξονα -
+        # ξένες ετικέτες δεν τραβούν το σίδερο μακριά από τη δοκό του·
+        # τη σύγχυση με ξένες ετικέτες τη λύνει η ολίσθηση του κειμένου.
+        _own_bt = None
+        _mbm = re.search(r'beam=(FL-?\d+_)BEAM(\d+)\b', beambar_debug.get(name, ''))
+        if _mbm:
+            _own_bt = _mbm.group(1) + 'BEAM_TEXT' + _mbm.group(2)
+        # «ΠΡΩΤΑ ΑΠ' ΟΛΑ κοντά στο ΔΟΚΑΡΙ»: η θέση του ΣΙΔΗΡΟΥ δεν
+        # μπλοκάρεται από ΚΑΝΕΝΑ κείμενο (ούτε το δικό του, όταν αυτό
+        # κάθεται ανάμεσα στη φυσική θέση και τη δοκό) - μόνο η ζώνη και
+        # η πλευρά ΑΞΟΝΑ της δοκού ισχύουν. Τα κείμενα τακτοποιούνται
+        # με ολίσθηση, όχι κρατώντας το σίδερο μακριά.
+        _sides_all = BEAMBAR_TEXT_SIDE.get(name)
+        if _sides_all is not None:
+            BEAMBAR_TEXT_SIDE[name] = []
+        for frac in (1.0, 0.9, 0.75, 0.6, 0.45, 0.3, 0.15, 0.0):
             cdx, cdy = bdx*frac, bdy*frac
             if _beambar_side_ok(name, my_lines1, cdx, cdy):
                 ok_pos = (cdx, cdy); break
+        if os.environ.get('DEBUG_CN') == name:
+            print(f'[VAL {name}] snap=({bdx:.3f},{bdy:.3f}) ok_pos={ok_pos}', flush=True)
+        if _sides_all is not None:
+            BEAMBAR_TEXT_SIDE[name] = _sides_all
         if ok_pos is not None:
             beam_res[name] = ok_pos
 
@@ -839,6 +937,8 @@ def process_all(input_path, is_training_file=False):
         tot += 1
         nudge_dx,nudge_dy,tdx,tdy,good = bar_and_text_slide(name, blocks, dx, dy, obstacle_lines, hatch_polys, placed_boxes)
         final_dx, final_dy = dx+nudge_dx, dy+nudge_dy
+        if os.environ.get('DEBUG_CN') == name:
+            print(f'[ASSIGN {name}] beam_res=({dx:.3f},{dy:.3f}) nudge=({nudge_dx:.3f},{nudge_dy:.3f}) final=({final_dx:.3f},{final_dy:.3f}) good={good}', flush=True)
         insert_final[name] = (final_dx, final_dy)
         beam_final_bar_pos[name] = (final_dx, final_dy)
         if tdx or tdy:
@@ -876,6 +976,7 @@ def process_all(input_path, is_training_file=False):
     # Επιτρεπόμενο κουτί ανά SLABBAR: η πλάκα που περιέχει το ΚΕΝΤΡΟ της ράβδου
     # στη ΒΑΣΙΚΗ της θέση (πριν από κάθε μετατόπιση), διευρυμένη κατά τη φυσική
     # έκταση της ράβδου. Εκφυλισμένα bbox πλακών (ελλιπή slab_poly) αγνοούνται.
+    COLLAPSE_BARS.clear()
     SLAB_POLYS_MAP.clear()
     SLAB_POLYS_MAP.update(get_slab_polys(input_path))
     SLABBAR_HOME_SLAB.clear()
@@ -1165,6 +1266,127 @@ def process_all(input_path, is_training_file=False):
                             confl.append((name,oname))
         return confl
 
+    def _slide_text_along(rname, obst_r, placed_r):
+        rdx, rdy = insert_final.get(rname, (0, 0))
+        rlines,_ = block_lines_local(blocks[rname])
+        rbl = block_text_bboxes(blocks[rname])
+        if not rlines or not rbl:
+            return None
+        (rux,ruy),(rlo,rhi) = spine_and_bounds(rlines)
+        rhb = union_bbox(rbl)
+        rht = ((rhb[0]+rhb[2])/2)*rux + ((rhb[1]+rhb[3])/2)*ruy
+        # ΚΑΝΟΝΑΣ ΑΠΟ ΤΟ MANUAL_MODEL του μηχανικού: το κείμενο σύρεται κατά
+        # μήκος ΚΑΙ στη νοητή προέκταση του άξονα της ράβδου (έως 1.5μ πέρα
+        # από κάθε άκρο) - στο πρότυπό του π.χ. Φ10/50 σε ράβδο 0.95μ σύρθηκε
+        # 1.70μ. Πάντα με προτίμηση τη μικρότερη μετατόπιση (σάρωση από μικρό
+        # t2 σε μεγάλο) και όλα τα κριτήρια καθαρότητας ανέπαφα.
+        _ext = 1.5
+        # ΑΓΚΥΡΩΣΗ (κανόνας μηχανικού, υπόδειγμα SLABBAR47): το κείμενο μπορεί
+        # να προεξέχει στη νοητή προέκταση, αλλά το κοντινό του άκρο ΔΕΝ περνά
+        # το άκρο της ράβδου - το διάστημά του κατά μήκος πρέπει πάντα να
+        # τέμνει το τμήμα [rlo,rhi]. Προτίμηση πάντα σε πλήρως-εντός θέσεις
+        # (η σάρωση ξεκινά από τη φυσική).
+        _tws = [((b_[0]*rux+b_[1]*ruy), (b_[2]*rux+b_[3]*ruy)) for b_ in
+                [text_bbox(x_, y_, w_, h_, r_) for x_, y_, w_, h_, r_ in rbl]]
+        _tlo0 = min(min(a_, b_) for a_, b_ in _tws); _thi0 = max(max(a_, b_) for a_, b_ in _tws)
+        # ΚΑΝΟΝΑΣ ΕΓΓΥΤΗΤΑΣ (από το MANUAL_MODEL): προτιμάται πάντα η θέση
+        # ΚΟΝΤΙΝΟΤΕΡΗ στη φυσική, έστω με το χαλαρό κριτήριο, παρά μακρινή
+        # «τέλεια». Γι' αυτό ανά θέση t δοκιμάζονται ΚΑΙ τα δύο κριτήρια
+        # (full -> relaxed) πριν εξεταστεί επόμενη, μακρύτερη θέση.
+        # ΦΑΣΗ Α («να διαβάζεται» - απόλυτη προτεραιότητα): η ΚΟΝΤΙΝΟΤΕΡΗ
+        # θέση με ΚΑΘΑΡΑ γράμματα (πλήρες κριτήριο ή γραμμές μόνο στα κενά
+        # σειρών). Μικρομετακίνηση 0.10-0.30 σε καθαρή θέση προτιμάται ΠΑΝΤΑ
+        # από παραμονή με γραμμή πάνω στα γράμματα.
+        # ΦΑΣΗ Β (μόνο αν η Α άδεια): κομμένες θέσεις (χαλαρό / Σκαλί 2),
+        # πάντα ορατές στο Δ του audit.
+        _ts_all = []
+        for t2 in [0.0] + [STEP*k for k in range(1,int(MAX_SLIDE/STEP)+1)]:
+            for ts2 in ((1,) if t2==0 else (1,-1)):
+                tc2 = rht + t2*ts2
+                if tc2 < rlo-_ext or tc2 > rhi+_ext:
+                    continue
+                _sh_ = t2*ts2
+                if _tlo0 + _sh_ > rhi + 1e-6 or _thi0 + _sh_ < rlo - 1e-6:
+                    continue  # αγκύρωση: το κείμενο έχασε την επαφή με τη ράβδο
+                _ts_all.append((rux*t2*ts2, ruy*t2*ts2))
+        for rtx, rty in _ts_all:
+            if is_ok_full(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,)):
+                return (rtx, rty)
+            if is_ok_tight(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,)):
+                return (rtx, rty)
+        for rtx, rty in _ts_all:
+            if is_ok_relaxed(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,), max_crossings=1):
+                return (rtx, rty)
+            if is_ok_tight(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,),
+                           max_row_crossings=1):
+                return (rtx, rty)
+        return None
+
+    def _circle_boxes():
+        out = []
+        for sn in blocks:
+            if not re.match(r'FL-?\d+_SLAB\d+$', sn):
+                continue
+            ox_, oy_ = ins.get(sn, (0, 0))
+            ctdx, ctdy = text_local_final.get(sn, (0, 0))
+            for e in entities_from_pairs(blocks[sn]):
+                if e[0][1] == 'CIRCLE':
+                    d_ = to_dict(e)
+                    if d_.get(8, [''])[0] == 'slab_center':
+                        cx_ = float(d_[10][0])+ox_+ctdx
+                        cy_ = float(d_[20][0])+oy_+ctdy
+                        r_ = float(d_[40][0])
+                        out.append(((cx_-r_, cy_-r_, cx_+r_, cy_+r_), sn))
+        return out
+
+    def _internal_bad_count():
+        bad = 0
+        boxes_all = all_placed_text_boxes()
+        for i_, (b1, n1) in enumerate(boxes_all):
+            for b2, n2 in boxes_all[i_+1:]:
+                if n1 == n2:
+                    continue
+                # επικάλυψη Ή οριακό κενό < 0.03 (ίδιο κριτήριο με το τελικό audit)
+                if not (b1[2] + 0.03 < b2[0] or b2[2] + 0.03 < b1[0] or
+                        b1[3] + 0.03 < b2[1] or b2[3] + 0.03 < b1[1]):
+                    bad += 1
+        for b1, n1 in boxes_all:
+            for cb_, sn_ in _circle_boxes():
+                if sn_ == n1:
+                    continue
+                if not (b1[2] < cb_[0] or cb_[2] < b1[0] or b1[3] < cb_[1] or cb_[3] < b1[1]):
+                    bad += 1
+        obst_all_ = final_rebar_lines()
+        for tname in [n_ for n_ in blocks if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', n_)]:
+            tdx_, tdy_ = insert_final.get(tname, (0, 0))
+            if re.match(r'FL-?\d+_BEAMBAR', tname) and tdx_ <= -49:
+                continue
+            ttx_, tty_ = text_local_final.get(tname, (0, 0))
+            tbl_ = block_text_bboxes(blocks[tname])
+            if not tbl_:
+                continue
+            if parallel_cut_full(tbl_, tdx_+ttx_, tdy_+tty_, [s for s in obst_all_ if s[4] != tname], ()):
+                bad += 1
+            # και η ΓΡΑΜΜΗ της ράβδου: αν κόβει παράλληλα ξένο κείμενο, μετράει
+            tlines_, _ = block_lines_local(blocks[tname])
+            for b1, n1 in boxes_all:
+                if n1 == tname:
+                    continue
+                hor_ = (b1[2]-b1[0]) >= (b1[3]-b1[1])
+                cut_ = False
+                for a_, b_, c_, d_ in tlines_:
+                    sg = (a_+tdx_, b_+tdy_, c_+tdx_, d_+tdy_)
+                    if not seg_intersects_bbox(sg, b1):
+                        continue
+                    lx_, ly_ = sg[2]-sg[0], sg[3]-sg[1]
+                    ll_ = math.hypot(lx_, ly_)
+                    comp_ = abs(lx_/ll_) if (ll_ > 1e-9 and hor_) else (abs(ly_/ll_) if ll_ > 1e-9 else 0.0)
+                    if comp_ > 0.94:
+                        cut_ = True; break
+                if cut_:
+                    bad += 1
+        return bad
+
     for _pass in range(6):
         conflicts = find_conflicts()
         if not conflicts:
@@ -1415,6 +1637,8 @@ def process_all(input_path, is_training_file=False):
             if re.match(r'FL-?\d+_BEAMBAR', rname) and rdx <= -49:
                 continue
             rlines,_ = block_lines_local(blocks[rname])
+            if rname in COLLAPSE_BARS:
+                rlines = _collapse_lines(rlines)
             for x1,y1,x2,y2 in rlines:
                 out.append((x1+rdx, y1+rdy, x2+rdx, y2+rdy, rname))
         return out
@@ -1535,7 +1759,45 @@ def process_all(input_path, is_training_file=False):
             cur_cross = _bar_crossings(dx, dy)
             victim_idx = set(i for i,(b,n2) in enumerate(all_boxes) if n2==oname)
             success = False
-            for check in ('full','relaxed'):
+            # «ΠΡΩΤΑ ΑΠ' ΟΛΑ κοντά στο ΔΟΚΑΡΙ»: πριν μετακινηθεί το ΣΙΔΕΡΟ,
+            # δοκιμάζεται να παραμερίσει ΤΟ ΘΥΜΑ (το κείμενο που κόβει η
+            # γραμμή) - σύρσιμο κατά μήκος για κείμενα ράβδων, εντός δοκού
+            # για κείμενα δοκών. Η ράβδος μένει κουμπωμένη στη δοκό της.
+            _sv_i = dict(insert_final); _sv_t = dict(text_local_final)
+            _vmoved = False
+            if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', oname):
+                _vs = _slide_text_along(oname, final_rebar_lines(exclude=(oname,)),
+                                         [b_ for b_, n_v in all_placed_text_boxes(exclude_name=oname)] +
+                                         [cb_ for cb_, _sv in _circle_boxes()])
+                if _vs is not None:
+                    _vt0 = text_local_final.get(oname, (0.0, 0.0))
+                    if abs(_vs[0]-_vt0[0]) > 1e-9 or abs(_vs[1]-_vt0[1]) > 1e-9:
+                        text_local_final[oname] = _vs
+                        _vmoved = True
+            elif re.match(r'FL-?\d+_BEAM_TEXT\d+$', oname):
+                _pv = [b_ for b_, n_v in all_placed_text_boxes(exclude_name=oname)]
+                _vs = beam_text_slide(oname, blocks, final_rebar_lines(), hatch_polys, _pv, relaxed=True)
+                _vi0 = insert_final.get(oname, (0.0, 0.0))
+                if _vs is not None and (abs(_vs[0]-_vi0[0]) > 1e-9 or abs(_vs[1]-_vi0[1]) > 1e-9):
+                    insert_final[oname] = _vs
+                    _vmoved = True
+            if _vmoved:
+                # καθάρισε η γραμμή από το θύμα στη ΝΕΑ του θέση;
+                _nb = all_placed_text_boxes(exclude_name=name)
+                _still = False
+                for x1v, y1v, x2v, y2v in lines:
+                    _sg = (x1v+dx, y1v+dy, x2v+dx, y2v+dy)
+                    for _bb2, _n2v in _nb:
+                        if _n2v == oname and seg_intersects_bbox(_sg, _bb2):
+                            _still = True; break
+                    if _still: break
+                if not _still:
+                    success = True; fixed_any2 = True; seen2.add(name)
+                    all_boxes = _nb
+                else:
+                    insert_final.clear(); insert_final.update(_sv_i)
+                    text_local_final.clear(); text_local_final.update(_sv_t)
+            for check in (() if success else ('full','relaxed')):
                 for s in [0.05*k for k in range(0,33)]:
                     for sign in ((1,) if s==0 else (1,-1)):
                         ndx,ndy = dx+nx*s*sign, dy+ny*s*sign
@@ -1660,6 +1922,49 @@ def process_all(input_path, is_training_file=False):
                     text_local_final.clear(); text_local_final.update(snap_txt)
             if success:
                 continue
+            # 3β) ΕΦΕΔΡΕΙΑ ΦΟΥΡΚΕΤΑΣ (ρητά εγκεκριμένη - περίπτωση SLABBAR14):
+            #    ΜΟΝΟ για ράβδους με άγκιστρα/φουρκέτες και στα ΔΥΟ άκρα, όταν
+            #    ΟΛΑ τα σκέλη που κόβουν κείμενα είναι εκτός κορμού και καμία
+            #    νόμιμη κίνηση δεν έλυσε: η γεωμετρία καταρρέει στη γραμμή-κορμό
+            #    (ίδιο κείμενο, ίδιες οντότητες, απλή γραμμή στο τελικό αρχείο).
+            if name not in COLLAPSE_BARS:
+                _co = _collapse_lines(lines)
+                _perp_off = [max(abs((x1-c1)), abs((y1-c2)), abs((x2-c3)), abs((y2-c4)))
+                             for (x1,y1,x2,y2),(c1,c2,c3,c4) in zip(lines, _co)]
+                _arm_idx = [k9 for k9,o9 in enumerate(_perp_off) if o9 > 0.05]
+                if len(_arm_idx) >= 2:
+                    (_au,_av),(_alo2,_ahi2) = spine_and_bounds(lines)
+                    _arm_ts = []
+                    for k9 in _arm_idx:
+                        x1a,y1a,x2a,y2a = lines[k9]
+                        _arm_ts.append(((x1a+x2a)/2*_au + (y1a+y2a)/2*_av))
+                    _span2 = _ahi2 - _alo2
+                    _both_ends = (min(_arm_ts) < _alo2 + 0.25*_span2 and
+                                  max(_arm_ts) > _ahi2 - 0.25*_span2)
+                    if _both_ends:
+                        # τα κοψίματα προέρχονται ΜΟΝΟ από σκέλη εκτός κορμού;
+                        _spine_hits = False
+                        for k9,(x1a,y1a,x2a,y2a) in enumerate(lines):
+                            if k9 in _arm_idx:
+                                continue
+                            _sg2 = (x1a+dx, y1a+dy, x2a+dx, y2a+dy)
+                            for _i2 in (cur_cross & victim_idx):
+                                if seg_intersects_bbox(_sg2, all_boxes[_i2][0]):
+                                    _spine_hits = True; break
+                            if _spine_hits: break
+                        if not _spine_hits:
+                            _co2 = _collapse_lines(lines)
+                            _nh2 = False
+                            for xx1,yy1,xx2,yy2 in _co2:
+                                _sg3 = (xx1+dx, yy1+dy, xx2+dx, yy2+dy)
+                                for bb3, _nb3 in all_boxes:
+                                    if seg_intersects_bbox(_sg3, bb3):
+                                        _nh2 = True; break
+                                if _nh2: break
+                            if not _nh2:
+                                pass  # ΑΠΕΝΕΡΓΟ κατόπιν εντολής: COLLAPSE_BARS.add(name)
+                                success = True; fixed_any2 = True; seen2.add(name)
+                                continue
             # 4) τελευταία λύση: μετακίνηση του ΘΥΜΑΤΟΣ, αν είναι BEAM_TEXT -
             #    ολίσθηση μέσα στη δοκό του με ανεκτικότητα 1 γραμμής. Ο κανόνας
             #    "ποτέ εκτός δοκού" παραμένει απαράβατος μέσα στο beam_text_slide.
@@ -1771,95 +2076,6 @@ def process_all(input_path, is_training_file=False):
                 text_local_final.clear(); text_local_final.update(snap_ct)
         return False
 
-    def _slide_text_along(rname, obst_r, placed_r):
-        rdx, rdy = insert_final.get(rname, (0, 0))
-        rlines,_ = block_lines_local(blocks[rname])
-        rbl = block_text_bboxes(blocks[rname])
-        if not rlines or not rbl:
-            return None
-        (rux,ruy),(rlo,rhi) = spine_and_bounds(rlines)
-        rhb = union_bbox(rbl)
-        rht = ((rhb[0]+rhb[2])/2)*rux + ((rhb[1]+rhb[3])/2)*ruy
-        for chk in ('full','relaxed'):
-            for t2 in [0.0] + [STEP*k for k in range(1,int(MAX_SLIDE/STEP)+1)]:
-                for ts2 in ((1,) if t2==0 else (1,-1)):
-                    tc2 = rht + t2*ts2
-                    if tc2 < rlo-1e-6 or tc2 > rhi+1e-6:
-                        continue
-                    rtx, rty = rux*t2*ts2, ruy*t2*ts2
-                    if chk=='full':
-                        ok2 = is_ok_full(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,))
-                    else:
-                        ok2 = is_ok_relaxed(rbl, rdx+rtx, rdy+rty, obst_r, hatch_polys, placed_r, (rname,), max_crossings=1)
-                    if ok2:
-                        return (rtx, rty)
-        return None
-
-    def _circle_boxes():
-        out = []
-        for sn in blocks:
-            if not re.match(r'FL-?\d+_SLAB\d+$', sn):
-                continue
-            ox_, oy_ = ins.get(sn, (0, 0))
-            ctdx, ctdy = text_local_final.get(sn, (0, 0))
-            for e in entities_from_pairs(blocks[sn]):
-                if e[0][1] == 'CIRCLE':
-                    d_ = to_dict(e)
-                    if d_.get(8, [''])[0] == 'slab_center':
-                        cx_ = float(d_[10][0])+ox_+ctdx
-                        cy_ = float(d_[20][0])+oy_+ctdy
-                        r_ = float(d_[40][0])
-                        out.append(((cx_-r_, cy_-r_, cx_+r_, cy_+r_), sn))
-        return out
-
-    def _internal_bad_count():
-        bad = 0
-        boxes_all = all_placed_text_boxes()
-        for i_, (b1, n1) in enumerate(boxes_all):
-            for b2, n2 in boxes_all[i_+1:]:
-                if n1 == n2:
-                    continue
-                # επικάλυψη Ή οριακό κενό < 0.03 (ίδιο κριτήριο με το τελικό audit)
-                if not (b1[2] + 0.03 < b2[0] or b2[2] + 0.03 < b1[0] or
-                        b1[3] + 0.03 < b2[1] or b2[3] + 0.03 < b1[1]):
-                    bad += 1
-        for b1, n1 in boxes_all:
-            for cb_, sn_ in _circle_boxes():
-                if sn_ == n1:
-                    continue
-                if not (b1[2] < cb_[0] or cb_[2] < b1[0] or b1[3] < cb_[1] or cb_[3] < b1[1]):
-                    bad += 1
-        obst_all_ = final_rebar_lines()
-        for tname in [n_ for n_ in blocks if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', n_)]:
-            tdx_, tdy_ = insert_final.get(tname, (0, 0))
-            if re.match(r'FL-?\d+_BEAMBAR', tname) and tdx_ <= -49:
-                continue
-            ttx_, tty_ = text_local_final.get(tname, (0, 0))
-            tbl_ = block_text_bboxes(blocks[tname])
-            if not tbl_:
-                continue
-            if parallel_cut_full(tbl_, tdx_+ttx_, tdy_+tty_, [s for s in obst_all_ if s[4] != tname], ()):
-                bad += 1
-            # και η ΓΡΑΜΜΗ της ράβδου: αν κόβει παράλληλα ξένο κείμενο, μετράει
-            tlines_, _ = block_lines_local(blocks[tname])
-            for b1, n1 in boxes_all:
-                if n1 == tname:
-                    continue
-                hor_ = (b1[2]-b1[0]) >= (b1[3]-b1[1])
-                cut_ = False
-                for a_, b_, c_, d_ in tlines_:
-                    sg = (a_+tdx_, b_+tdy_, c_+tdx_, d_+tdy_)
-                    if not seg_intersects_bbox(sg, b1):
-                        continue
-                    lx_, ly_ = sg[2]-sg[0], sg[3]-sg[1]
-                    ll_ = math.hypot(lx_, ly_)
-                    comp_ = abs(lx_/ll_) if (ll_ > 1e-9 and hor_) else (abs(ly_/ll_) if ll_ > 1e-9 else 0.0)
-                    if comp_ > 0.94:
-                        cut_ = True; break
-                if cut_:
-                    bad += 1
-        return bad
-
     def _final_passes():
         col_names2 = sorted([n for n in blocks if re.match(r'FL-?\d+_COLUMN_TEXT\d+$', n)],
                              key=lambda n: int(re.search(r'\d+$', n).group()))
@@ -1899,8 +2115,50 @@ def process_all(input_path, is_training_file=False):
                 # αλγόριθμος το έβλεπε "δωρεάν χώρο" - K82/K83 απλώνονταν πάνω
                 # στο τοιχίο αντί καθαρά δίπλα του, όπως τα βάζει ο μηχανικός).
                 _dW = os.environ.get('DEBUG_CN') == name
-                if _dW: print(f'[WALL {name}] edge0={_dist0:.2f} ovl0={_ovl0}', flush=True)
-                if _is_wall2 and (_ovl0 or _dist0 > 0.45):
+                # ΑΝΑΓΝΩΣΙΜΟΤΗΤΑ (κανόνας μηχανικού, περίπτωση Κ7): ετικέτα με
+                # >=2 γραμμές ΜΕΣΑ της δεν διαβάζεται -> μετεγκατάσταση, με
+                # αποδοχή ΜΟΝΟ θέσης με ΜΗΔΕΝ γραμμές μέσα της.
+                def _cuts_in(bb_or_list):
+                    boxes_ = bb_or_list if isinstance(bb_or_list, list) else [bb_or_list]
+                    cnt_ = 0
+                    for on_ in blocks:
+                        if not (re.match(r'FL-?\d+_(COLUMN|BEAM|SLAB|FREENODE|BEAMBAR|SLABBAR)\d*$', on_)
+                                and 'TEXT' not in on_) or on_ == own_col:
+                            continue
+                        od_ = insert_final.get(on_, ins.get(on_, (0, 0)))
+                        if re.match(r'FL-?\d+_BEAMBAR', on_) and od_[0] <= -49:
+                            continue
+                        hit_ = False
+                        for lx1, ly1, lx2, ly2 in block_lines_local(blocks[on_])[0]:
+                            x1_, y1_, x2_, y2_ = lx1+od_[0], ly1+od_[1], lx2+od_[0], ly2+od_[1]
+                            for bb_ in boxes_:
+                                p_ = 0.02
+                                c0_, c1_, c2_, c3_ = bb_[0]+p_, bb_[1]+p_, bb_[2]-p_, bb_[3]-p_
+                                if c2_ <= c0_ or c3_ <= c1_: continue
+                                if max(x1_,x2_) < c0_ or min(x1_,x2_) > c2_ or max(y1_,y2_) < c1_ or min(y1_,y2_) > c3_:
+                                    continue
+                                if (c0_ <= x1_ <= c2_ and c1_ <= y1_ <= c3_) or (c0_ <= x2_ <= c2_ and c1_ <= y2_ <= c3_):
+                                    hit_ = True
+                                else:
+                                    ddx_, ddy_ = x2_-x1_, y2_-y1_
+                                    for ex1_, ey1_, ex2_, ey2_ in ((c0_,c1_,c2_,c1_),(c0_,c3_,c2_,c3_),(c0_,c1_,c0_,c3_),(c2_,c1_,c2_,c3_)):
+                                        fx_, fy_ = ex2_-ex1_, ey2_-ey1_
+                                        den_ = ddx_*fy_ - ddy_*fx_
+                                        if abs(den_) < 1e-12: continue
+                                        t_ = ((ex1_-x1_)*fy_ - (ey1_-y1_)*fx_)/den_
+                                        u_ = ((ex1_-x1_)*ddy_ - (ey1_-y1_)*ddx_)/den_
+                                        if 0 <= t_ <= 1 and 0 <= u_ <= 1:
+                                            hit_ = True; break
+                                if hit_: break
+                            if hit_: break
+                        if hit_: cnt_ += 1
+                    return cnt_
+                def _row_boxes(ddx_, ddy_):
+                    return [text_bbox(x_+ddx_, y_+ddy_, w_, h_, r_) for x_, y_, w_, h_, r_ in bl2]
+                _rowcut0 = _cuts_in(_row_boxes(_dx0, _dy0))
+                _cut0 = _cuts_in(_cb0)
+                if _dW: print(f'[WALL {name}] edge0={_dist0:.2f} ovl0={_ovl0} rowcut0={_rowcut0} unioncut0={_cut0}', flush=True)
+                if _is_wall2 and (_ovl0 or _dist0 > 0.45 or _rowcut0 >= 1):
                     # ΚΡΙΤΗΡΙΟ: ελάχιστη απόσταση από ΠΑΡΕΙΑ (και κεφαλές) του
                     # τοιχίου, όπως τοποθετεί ο μηχανικός (K4: στη δυτική προέκταση
                     # έξω από το περίγραμμα, δίπλα στα K7/K8/K9 - K5: κολλητά στην
@@ -1917,7 +2175,7 @@ def process_all(input_path, is_training_file=False):
                     _seeds_w = [(ccx2, ccy2),
                                 (col_bb2[0]-0.6, ccy2), (col_bb2[2]+0.6, ccy2),
                                 (ccx2, col_bb2[1]-0.6), (ccx2, col_bb2[3]+0.6)]
-                    _cand_w = None; _dw = None
+                    _cand_w = None; _dw = None; _best_cutw = None; _best_rcw = None
                     for _sx, _sy in _seeds_w:
                         _cw = radial_place_full(name, blocks, _obst_w, hatch_polys, _placed_wo,
                                                  (own_col,), seed=(_sx-_lcx, _sy-_lcy), max_r=1.6,
@@ -1938,11 +2196,42 @@ def process_all(input_path, is_training_file=False):
                         if _oncirc:
                             continue
                         _ew = _edge_w(_fbw)
-                        if _dw is None or _ew < _dw:
-                            _cand_w, _dw = _cw, _ew
+                        _rcw = _cuts_in(_row_boxes(*_cw))
+                        _cutw = _cuts_in(_fbw)
+                        # προτίμηση: καμία γραμμή σε ΓΡΑΜΜΑΤΑ -> καμία γραμμή
+                        # καθόλου -> κοντινότερη στην παρειά
+                        if _dw is None or (_rcw, _cutw, _ew) < (_best_rcw, _best_cutw, _dw):
+                            _cand_w, _dw, _best_cutw, _best_rcw = _cw, _ew, _cutw, _rcw
+                    # ΠΛΑΓΙΟ ΔΙΧΤΥ (περίπτωση Κ8 «0.45 δεξιά»): αν κανένας
+                    # radial υποψήφιος δεν έδωσε γράμματα-καθαρά, δοκιμάζονται
+                    # απλές πλάγιες μετατοπίσεις από την τρέχουσα θέση - πρώτη
+                    # με ΜΗΔΕΝ γραμμές στα γράμματα και ελεύθερη κερδίζει.
+                    if _rowcut0 >= 1 and (_best_rcw is None or _best_rcw > 0):
+                        _lbl_w = block_text_bboxes(blocks[name])
+                        for _dds in [0.05*ks for ks in range(3, 19)]:
+                            _got_s = False
+                            for _shs in ((_dds,0),(-_dds,0),(0,-_dds),(0,_dds)):
+                                _cs = (_dx0+_shs[0], _dy0+_shs[1])
+                                _fbs = translate_bbox(_cb0, _shs[0], _shs[1])
+                                if _cuts_in(_row_boxes(*_cs)) > 0:
+                                    continue
+                                if not is_ok_relaxed(_lbl_w, _cs[0], _cs[1], final_rebar_lines(),
+                                                      hatch_polys, [b9 for b9, n9 in all_placed_text_boxes(exclude_name=name)],
+                                                      (own_col,), max_crossings=1):
+                                    continue
+                                _cand_w, _dw = _cs, _edge_w(_fbs)
+                                _best_rcw, _best_cutw = 0, _cuts_in(_fbs)
+                                _got_s = True
+                                break
+                            if _got_s:
+                                break
                     if _dW: print(f'[WALL {name}] cand={_cand_w} edge_cand={_dw}', flush=True)
                     if _cand_w is not None:
-                        if _ovl0 or _dw < _dist0 - 0.15:
+                        # ΠΟΤΕ αποδοχή θέσης που ΧΕΙΡΟΤΕΡΕΥΕΙ την αναγνωσιμότητα
+                        # (γραμμές πάνω σε γράμματα) - η εγγύτητα στην παρειά είναι
+                        # δευτερεύουσα του κανόνα «να διαβάζεται».
+                        if (_best_rcw is not None and _best_rcw <= _rowcut0) and (
+                                _ovl0 or _dw < _dist0 - 0.15 or (_rowcut0 >= 1 and _best_rcw == 0)):
                             _blk_w = set()
                             for x9, y9, w9, h9, r9 in bl2:
                                 tb9 = text_bbox(x9+_cand_w[0], y9+_cand_w[1], w9, h9, r9)
@@ -2602,7 +2891,8 @@ def process_all(input_path, is_training_file=False):
                                 # νόμιμη μετατόπιση (radial, κοντά στην κολώνα της),
                                 # και ξαναδοκιμάζεται η κίνηση σιδήρου+σύρσιμο.
                                 # Πλήρης αναίρεση αν δεν κλείσει.
-                                _dbg8 = os.environ.get('DEBUG_PAIR2') and 'BEAMBAR8' in (n1+n2) and 'BEAM_TEXT6' in (n1+n2)
+                                _dbgp = os.environ.get('DEBUG_PAIR2', '')
+                                _dbg8 = bool(_dbgp) and set(_dbgp.split(',')) == {n1, n2}
                                 if _dbg8:
                                     print(f'[YIELD] φτάνω εδώ για mover={mover}', flush=True)
                                 _mtb = block_text_bboxes(blocks[mover])
@@ -2724,10 +3014,42 @@ def process_all(input_path, is_training_file=False):
                                                             _sf = _slide_text_along(n_e, final_rebar_lines(exclude=(n_e,)),
                                                                                      [bq for bq, nq in all_placed_text_boxes(exclude_name=n_e)] +
                                                                                      [cq for cq, _sq2 in _circle_boxes()])
-                                                            if _sf is None and not _slide_text_along_chain(n_e):
-                                                                return False
                                                             if _sf is not None:
                                                                 text_local_final[n_e] = _sf
+                                                            elif not _slide_text_along_chain(n_e):
+                                                                # πλήρης εργαλειοθήκη και για τον μπλοκαρισμένο:
+                                                                # μικρή μετακίνηση του ΣΙΔΗΡΟΥ του (μέσω πύλης) + σύρσιμο
+                                                                _el, _ = block_lines_local(blocks[n_e])
+                                                                _eb = None; _ebl = -1.0
+                                                                for ex1, ey1, ex2, ey2 in _el:
+                                                                    _l2 = math.hypot(ex2-ex1, ey2-ey1)
+                                                                    if _l2 > _ebl: _ebl = _l2; _eb = (ex1, ey1, ex2, ey2)
+                                                                if _eb is None:
+                                                                    if _dbg8: print(f'[YIELD-FIX] {n_e}: χωρίς γραμμές', flush=True)
+                                                                    return False
+                                                                _eux, _euy = (_eb[2]-_eb[0])/_ebl, (_eb[3]-_eb[1])/_ebl
+                                                                _epx, _epy = -_euy, _eux
+                                                                _ed0 = insert_final.get(n_e, (0.0, 0.0))
+                                                                _efix = False
+                                                                for _es in [0.05*k5 for k5 in range(1, 8)]:
+                                                                    for _eg in (1, -1):
+                                                                        _enx, _eny = _ed0[0] + _epx*_es*_eg, _ed0[1] + _epy*_es*_eg
+                                                                        if not _bar_move_ok(n_e, _el, _enx, _eny):
+                                                                            continue
+                                                                        insert_final[n_e] = (_enx, _eny)
+                                                                        _sf2 = _slide_text_along(n_e, final_rebar_lines(exclude=(n_e,)),
+                                                                                                 [bq for bq, nq in all_placed_text_boxes(exclude_name=n_e)] +
+                                                                                                 [cq for cq, _sq3 in _circle_boxes()])
+                                                                        if _sf2 is not None:
+                                                                            text_local_final[n_e] = _sf2
+                                                                            _efix = True
+                                                                            break
+                                                                        insert_final[n_e] = _ed0
+                                                                    if _efix:
+                                                                        break
+                                                                if not _efix:
+                                                                    if _dbg8: print(f'[YIELD-FIX] {n_e}: ΟΛΑ απέτυχαν', flush=True)
+                                                                    return False
                                             return True
                                         # ΣΚΑΛΑ ΑΝΑ ΣΦΗΝΑ: (i) πλήρη εμπόδια, (ii) χωρίς τις
                                         # άλλες σφήνες, (iii) χωρίς κείμενα ράβδων + επισκευή.
@@ -2744,14 +3066,18 @@ def process_all(input_path, is_training_file=False):
                                             _v3 = [b_ for b_, n_d in all_placed_text_boxes(exclude_name=_btw)
                                                     if n_d != mover and not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', n_d)]
                                             _variants9.append((_v3, True))
-                                            for _plv9, _needfix9 in _variants9:
+                                            for _vi9, (_plv9, _needfix9) in enumerate(_variants9):
                                                 _res9 = beam_text_slide(_btw, blocks, final_rebar_lines(), hatch_polys, _plv9, relaxed=True)
                                                 _cur9 = insert_final.get(_btw, (0.0, 0.0))
+                                                if _dbg8:
+                                                    print(f'[YIELD-BT] {_btw} v{_vi9}: slide={_res9} cur={_cur9}', flush=True)
                                                 if _res9 is None or (abs(_res9[0]-_cur9[0]) < 1e-9 and abs(_res9[1]-_cur9[1]) < 1e-9):
                                                     continue
                                                 _snap_bi9 = dict(insert_final); _snap_bt9 = dict(text_local_final)
                                                 insert_final[_btw] = _res9
                                                 _ok9 = (not _needfix9) or _fix_rebar_blockers9((_btw,))
+                                                if _dbg8:
+                                                    print(f'[YIELD-BT] {_btw} v{_vi9}: fix_ok={_ok9}', flush=True)
                                                 _done3 = _ok9 and _retry_mover9()
                                                 if _dbg8:
                                                     print(f'[YIELD-BT] {_btw} -> {_res9} (fix={_needfix9}): retry -> {_done3}', flush=True)
@@ -2846,10 +3172,361 @@ def process_all(input_path, is_training_file=False):
             if not fixed_o:
                 break
 
+    def _cleanup_cuts():
+        """ΤΕΛΙΚΟ ΠΕΡΑΣΜΑ ΚΑΘΑΡΙΣΜΟΥ ΤΟΜΩΝ (γενικό, μέσω των υπαρχουσών πυλών):
+        (α) Ράβδος που μετακινήθηκε και η γραμμή της πλέον κόβει κείμενο, ενώ
+            θέση πιο κοντά στη φυσική είναι καθαρή -> επιστρέφει προς τη φυσική
+            (revert-if-clean). Λύνει μετακινήσεις που έγιναν για συγκρούσεις
+            που στο μεταξύ έπαψαν να υπάρχουν (SLABBAR14/Δ12.1).
+        (β) Δείκτης πλάκας που κόβεται από γραμμή πλάκας -> μικρή μετατόπιση
+            μέσω _marker_move_ok ώστε να βγει από τη γραμμή (Π6/SLAB8)."""
+        def _seg_cuts_bbox(x1,y1,x2,y2,bb):
+            # τέμνει το ΕΣΩΤΕΡΙΚΟ του bbox (όχι απλώς ακουμπά την άκρη);
+            pad=0.01
+            b0,b1,b2,b3 = bb[0]+pad, bb[1]+pad, bb[2]-pad, bb[3]-pad
+            if b2<=b0 or b3<=b1: return False
+            if max(x1,x2)<b0 or min(x1,x2)>b2 or max(y1,y2)<b1 or min(y1,y2)>b3: return False
+            if b0<=x1<=b2 and b1<=y1<=b3: return True
+            if b0<=x2<=b2 and b1<=y2<=b3: return True
+            dx,dy = x2-x1, y2-y1
+            for (ex1,ey1,ex2,ey2) in ((b0,b1,b2,b1),(b0,b3,b2,b3),(b0,b1,b0,b3),(b2,b1,b2,b3)):
+                fx,fy = ex2-ex1, ey2-ey1
+                den = dx*fy - dy*fx
+                if abs(den) < 1e-12: continue
+                t=((ex1-x1)*fy-(ey1-y1)*fx)/den; u=((ex1-x1)*dy-(ey1-y1)*dx)/den
+                if 0<=t<=1 and 0<=u<=1: return True
+            return False
+        # --- (α) revert-if-clean για μετακινημένες ράβδους ---
+        all_txt = all_placed_text_boxes()
+        for rn in list(insert_final):
+            if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', rn): continue
+            rdx, rdy = insert_final[rn]
+            if rdx <= -49: continue
+            if abs(rdx) < 1e-6 and abs(rdy) < 1e-6: continue
+            rl,_ = block_lines_local(blocks[rn])
+            cuts_now = any(_seg_cuts_bbox(x1+rdx,y1+rdy,x2+rdx,y2+rdy,b_)
+                            for x1,y1,x2,y2 in rl for b_,n_ in all_txt if n_ != rn)
+            if not cuts_now: continue
+            _cands_rc = [(rdx*f_, rdy*f_) for f_ in (0.0, 0.25, 0.5)]
+            # πλήρες πλέγμα κάθετων θέσεων γύρω από τη ΦΥΣΙΚΗ (η επιστροφή
+            # προς τη φυσική δεν αρκεί όταν κόβει κι εκείνη - SLABBAR14/Δ12.1)
+            _rb_ = None; _rbl_ = -1.0
+            for x1_,y1_,x2_,y2_ in rl:
+                _l_ = math.hypot(x2_-x1_, y2_-y1_)
+                if _l_ > _rbl_: _rbl_ = _l_; _rb_ = (x1_,y1_,x2_,y2_)
+            if _rb_ is not None:
+                _rux_, _ruy_ = (_rb_[2]-_rb_[0])/_rbl_, (_rb_[3]-_rb_[1])/_rbl_
+                _rpx_, _rpy_ = -_ruy_, _rux_
+                for _s_ in [0.05*k_ for k_ in range(1, 8)]:
+                    for _g_ in (1, -1):
+                        _cands_rc.append((_rpx_*_s_*_g_, _rpy_*_s_*_g_))
+            for cdx, cdy in _cands_rc:
+                if not _bar_move_ok(rn, rl, cdx, cdy): continue
+                if any(_seg_cuts_bbox(x1+cdx,y1+cdy,x2+cdx,y2+cdy,b_)
+                        for x1,y1,x2,y2 in rl for b_,n_ in all_txt if n_ != rn): continue
+                old_pos = insert_final[rn]
+                insert_final[rn] = (cdx, cdy)
+                sl_ = _slide_text_along(rn, final_rebar_lines(exclude=(rn,)),
+                                         [b_ for b_,nq in all_placed_text_boxes(exclude_name=rn)] +
+                                         [cb_ for cb_,sq in _circle_boxes()])
+                if sl_ is None:
+                    insert_final[rn] = old_pos
+                    continue
+                text_local_final[rn] = sl_
+                break
+        # --- (β) δείκτες που κόβονται από γραμμές πλακών ---
+        for sn in blocks:
+            if not re.match(r'FL-?\d+_SLAB\d+$', sn): continue
+            mb_ = slab_marker_boxes(blocks[sn])
+            if not mb_: continue
+            sdx, sdy = ins.get(sn,(0,0))
+            mtx, mty = text_local_final.get(sn,(0.0,0.0))
+            mub = union_bbox([(x+sdx+mtx, y+sdy+mty, w, h, rot) for x,y,w,h,rot in mb_])
+            slab_lines = []
+            for on in blocks:
+                if re.match(r'FL-?\d+_SLAB\d+$', on) and on != sn:
+                    od = ins.get(on,(0,0))
+                    for x1,y1,x2,y2 in block_lines_local(blocks[on])[0]:
+                        slab_lines.append((x1+od[0],y1+od[1],x2+od[0],y2+od[1]))
+            if not any(_seg_cuts_bbox(*sl_, mub) for sl_ in slab_lines): continue
+            fixed_m = False
+            _sb6 = SLAB_POLYS_MAP.get(sn)
+            _x_ok6 = _sb6 is not None and (_sb6[2]-_sb6[0]) >= 0.05
+            _y_ok6 = _sb6 is not None and (_sb6[3]-_sb6[1]) >= 0.05
+            for dd in [0.05*k for k in range(1, 25)]:
+                for sh in ((0,dd),(0,-dd),(dd,0),(-dd,0)):
+                    ntx, nty = mtx+sh[0], mty+sh[1]
+                    if not _marker_move_ok(sn, ntx, nty): continue
+                    nub = (mub[0]+sh[0], mub[1]+sh[1], mub[2]+sh[0], mub[3]+sh[1])
+                    # ΕΝΤΟΣ ΠΛΑΚΑΣ στους υγιείς άξονες - αλλιώς θα το πιάσει το ΣΤ
+                    if _x_ok6 and (nub[0] < _sb6[0]-0.03 or nub[2] > _sb6[2]+0.03): continue
+                    if _y_ok6 and (nub[1] < _sb6[1]-0.03 or nub[3] > _sb6[3]+0.03): continue
+                    if any(_seg_cuts_bbox(*sl_, nub) for sl_ in slab_lines): continue
+                    if any(not(nub[2]+0.03 < b_[0] or b_[2]+0.03 < nub[0] or
+                                nub[3]+0.03 < b_[1] or b_[3]+0.03 < nub[1])
+                            for b_,n_ in all_placed_text_boxes() if n_ != sn): continue
+                    text_local_final[sn] = (ntx, nty)
+                    fixed_m = True
+                    break
+                if fixed_m: break
+
     for _reconcile in range(4):
         _final_passes()
+        _cleanup_cuts()
         if _internal_bad_count() == 0:
             break
+
+    # ΠΕΡΑΣΜΑ ΣΥΜΠΥΚΝΩΣΗΣ (από το MANUAL_MODEL): αφού όλα κάτσουν, κάθε
+    # κείμενο ράβδου ξαναδοκιμάζει την ΚΟΝΤΙΝΟΤΕΡΗ στη φυσική του καθαρή
+    # θέση - μετατοπίσεις που χρειάστηκαν νωρίς αλλά περίσσεψαν, μαζεύονται.
+    for _cp in range(2):
+        _moved_cp = 0
+        for rn_ in sorted(blocks):
+            if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', rn_):
+                continue
+            rdx_, rdy_ = insert_final.get(rn_, (0.0, 0.0))
+            if rdx_ <= -49:
+                continue
+            cur_tl = text_local_final.get(rn_, (0.0, 0.0))
+            cur_d = math.hypot(cur_tl[0], cur_tl[1])
+            if cur_d < 0.10:
+                continue
+            sol_cp = _slide_text_along(rn_, final_rebar_lines(exclude=(rn_,)),
+                                        [b_ for b_, n_cp in all_placed_text_boxes(exclude_name=rn_)] +
+                                        [cb_ for cb_, _scp in _circle_boxes()])
+            if sol_cp is not None and math.hypot(sol_cp[0], sol_cp[1]) < cur_d - 0.02:
+                text_local_final[rn_] = sol_cp
+                _moved_cp += 1
+                continue
+            # ΣΥΜΠΥΚΝΩΣΗ ΜΕ ΥΠΟΧΩΡΗΣΗ (κανόνας μηχανικού, περίπτωση «1Φ14»):
+            # κείμενο ράβδου μακριά από τη ΦΥΣΙΚΗ του θέση, ενώ η κοντινή θα
+            # ελευθερωνόταν με μικρή μετακίνηση ΕΝΟΣ γείτονα (ράβδου πλάκας ή
+            # κειμένου δοκού). Εντοπίζονται οι blockers της φυσικής θέσης,
+            # δοκιμάζεται η υποχώρησή τους (σύρσιμο/beam_text_slide), και
+            # κρατιέται ΜΟΝΟ συνδυασμός που φέρνει το κείμενο ουσιαστικά
+            # κοντύτερα (>0.15μ). Πλήρης αναίρεση αλλιώς.
+            if cur_d < 0.30:
+                continue
+            _rb_cp = block_text_bboxes(blocks[rn_])
+            _home_bbs = [text_bbox(x_+0.0, y_+0.0, w_, h_, r_) for x_, y_, w_, h_, r_ in _rb_cp]
+            _blk_cp = []
+            for b_, n_cp in all_placed_text_boxes(exclude_name=rn_):
+                if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR|BEAM_TEXT|COLUMN_TEXT)\d+$', n_cp):
+                    continue
+                for hb_ in _home_bbs:
+                    if not (hb_[2] + MIN_TEXT_GAP < b_[0] or b_[2] + MIN_TEXT_GAP < hb_[0] or
+                            hb_[3] + MIN_TEXT_GAP < b_[1] or b_[3] + MIN_TEXT_GAP < hb_[1]):
+                        if n_cp not in _blk_cp:
+                            _blk_cp.append(n_cp)
+                        break
+            for _bn_cp in _blk_cp[:3]:
+                _mcol = re.match(r'(FL-?\d+_)COLUMN_TEXT(\d+)$', _bn_cp)
+                if _mcol:
+                    _ownc = _mcol.group(1)+'COLUMN'+_mcol.group(2)
+                    if _ownc not in blocks:
+                        continue
+                    _lblc = block_text_bboxes(blocks[_bn_cp])
+                    _oc = insert_final.get(_bn_cp, (0.0, 0.0))
+                    _plc = [b_ for b_, n_g in all_placed_text_boxes(exclude_name=_bn_cp) if n_g != rn_]
+                    _fixed_c = False; _tried_c = 0
+                    for _ddc in [0.05*kc for kc in range(2, 13)]:
+                        for _shc in ((0,-_ddc),(0,_ddc),(_ddc,0),(-_ddc,0)):
+                            _txc, _tyc = _oc[0]+_shc[0], _oc[1]+_shc[1]
+                            if not is_ok_relaxed(_lblc, _txc, _tyc, final_rebar_lines(),
+                                                  hatch_polys, _plc, (_ownc,), max_crossings=1):
+                                continue
+                            _tried_c += 1
+                            if _tried_c > 8:
+                                break
+                            _sic = dict(insert_final); _stc = dict(text_local_final)
+                            insert_final[_bn_cp] = (_txc, _tyc)
+                            _solc = _slide_text_along(rn_, final_rebar_lines(exclude=(rn_,)),
+                                                       [b_ for b_, n_h in all_placed_text_boxes(exclude_name=rn_)] +
+                                                       [cb_ for cb_, _sh3 in _circle_boxes()])
+                            if _solc is not None and math.hypot(_solc[0], _solc[1]) < cur_d - 0.15:
+                                text_local_final[rn_] = _solc
+                                _moved_cp += 1
+                                _fixed_c = True
+                                break
+                            insert_final.clear(); insert_final.update(_sic)
+                            text_local_final.clear(); text_local_final.update(_stc)
+                        if _fixed_c or _tried_c > 8:
+                            break
+                    if _fixed_c:
+                        break
+                    continue
+                _si_cp = dict(insert_final); _st_cp = dict(text_local_final)
+                _movedb = False
+                if re.match(r'FL-?\d+_BEAM_TEXT\d+$', _bn_cp):
+                    _plb = [b_ for b_, n_d in all_placed_text_boxes(exclude_name=_bn_cp) if n_d != rn_]
+                    _rsb = beam_text_slide(_bn_cp, blocks, final_rebar_lines(), hatch_polys, _plb, relaxed=True)
+                    _cub = insert_final.get(_bn_cp, (0.0, 0.0))
+                    if _rsb is not None and (abs(_rsb[0]-_cub[0]) > 1e-9 or abs(_rsb[1]-_cub[1]) > 1e-9):
+                        insert_final[_bn_cp] = _rsb
+                        _movedb = True
+                else:
+                    _sfb = _slide_text_along(_bn_cp, final_rebar_lines(exclude=(_bn_cp,)),
+                                              [b_ for b_, n_e in all_placed_text_boxes(exclude_name=_bn_cp) if n_e != rn_] +
+                                              [cb_ for cb_, _se in _circle_boxes()])
+                    if _sfb is not None:
+                        _tlb = text_local_final.get(_bn_cp, (0.0, 0.0))
+                        if abs(_sfb[0]-_tlb[0]) > 1e-9 or abs(_sfb[1]-_tlb[1]) > 1e-9:
+                            text_local_final[_bn_cp] = _sfb
+                            _movedb = True
+                if not _movedb:
+                    continue
+                _sol2 = _slide_text_along(rn_, final_rebar_lines(exclude=(rn_,)),
+                                           [b_ for b_, n_f in all_placed_text_boxes(exclude_name=rn_)] +
+                                           [cb_ for cb_, _sf2 in _circle_boxes()])
+                if _sol2 is not None and math.hypot(_sol2[0], _sol2[1]) < cur_d - 0.15:
+                    text_local_final[rn_] = _sol2
+                    _moved_cp += 1
+                    break
+                insert_final.clear(); insert_final.update(_si_cp)
+                text_local_final.clear(); text_local_final.update(_st_cp)
+        if _moved_cp == 0:
+            break
+    if _internal_bad_count() > 0:
+        _final_passes()
+        _cleanup_cuts()
+
+    # ΤΕΛΙΚΟ ΠΕΡΑΣΜΑ «ΚΑΘΑΡΩΝ ΓΡΑΜΜΑΤΩΝ» (καθολικός κανόνας μηχανικού):
+    # κάθε κείμενο ράβδου που τελειώνει με γραμμή ΠΑΝΩ στα γράμματά του
+    # ξαναπερνά από τη δίφασική σκάλα ολίσθησης - αν υπάρχει θέση με καθαρά
+    # γράμματα (οσοδήποτε μικρή μετακίνηση, 0.10-0.30 συνήθως αρκεί),
+    # παίρνεται. Καμία άλλη αλλαγή, κανένας άλλος κανόνας δεν χαλαρώνει.
+    def _core_cut9(n_):
+        d_ = insert_final.get(n_, (0.0, 0.0)); t_ = text_local_final.get(n_, (0.0, 0.0))
+        for x_, y_, w_, h_, r_ in block_text_bboxes(blocks[n_]):
+            bb_ = text_bbox(x_+d_[0]+t_[0], y_+d_[1]+t_[1], w_, h_, r_)
+            p_ = 0.015
+            core_ = (bb_[0]+p_, bb_[1]+p_, bb_[2]-p_, bb_[3]-p_)
+            if core_[2] <= core_[0] or core_[3] <= core_[1]:
+                continue
+            for s_ in final_rebar_lines(exclude=(n_,)):
+                if seg_intersects_bbox(s_[:4], core_):
+                    return True
+        return False
+    for _lp9 in range(2):
+        _mv9 = 0
+        for rn8 in sorted(blocks):
+            if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', rn8):
+                continue
+            rd8 = insert_final.get(rn8, (0.0, 0.0))
+            if rd8[0] <= -49 or not _core_cut9(rn8):
+                continue
+            _t0 = text_local_final.get(rn8, (0.0, 0.0))
+            _fixed8 = False
+            _s8 = _slide_text_along(rn8, final_rebar_lines(exclude=(rn8,)),
+                                     [b_ for b_, n_x in all_placed_text_boxes(exclude_name=rn8)] +
+                                     [cb_ for cb_, _sx in _circle_boxes()])
+            if _s8 is not None and (abs(_s8[0]-_t0[0]) > 1e-9 or abs(_s8[1]-_t0[1]) > 1e-9):
+                text_local_final[rn8] = _s8
+                if not _core_cut9(rn8):
+                    _fixed8 = True; _mv9 += 1
+                else:
+                    text_local_final[rn8] = _t0
+            if not _fixed8:
+                # ράβδος παράλληλη σε γραμμή: μόνο-σύρσιμο δεν ξεφεύγει ποτέ -
+                # δοκιμή ΚΑΘΕΤΗΣ μετακίνησης σιδήρου (εντός πύλης) + σύρσιμο.
+                _ln8, _ = block_lines_local(blocks[rn8])
+                _mb8 = None; _ml8 = -1.0
+                for xx1, yy1, xx2, yy2 in _ln8:
+                    _l8 = math.hypot(xx2-xx1, yy2-yy1)
+                    if _l8 > _ml8: _ml8 = _l8; _mb8 = (xx1, yy1, xx2, yy2)
+                if _mb8 is None:
+                    continue
+                _u8 = ((_mb8[2]-_mb8[0])/_ml8, (_mb8[3]-_mb8[1])/_ml8)
+                _p8 = (-_u8[1], _u8[0])
+                _d0_8 = insert_final.get(rn8, (0.0, 0.0))
+                for _sm8 in [0.05*k8 for k8 in range(1, 8)]:
+                    for _sg8 in (1, -1):
+                        _n8 = (_d0_8[0] + _p8[0]*_sm8*_sg8, _d0_8[1] + _p8[1]*_sm8*_sg8)
+                        if not _bar_move_ok(rn8, _ln8, _n8[0], _n8[1]):
+                            continue
+                        # ΦΡΟΥΡΟΣ: η γραμμή στη νέα θέση δεν κόβει ΚΑΝΕΝΑ κείμενο
+                        # που δεν έκοβε ήδη - καμία λύση δεν χαλάει άλλον κανόνα.
+                        _hit_new8 = False
+                        for _bb8, _nb8 in all_placed_text_boxes(exclude_name=rn8):
+                            _old_hit = any(seg_intersects_bbox((a1+_d0_8[0], a2+_d0_8[1], a3+_d0_8[0], a4+_d0_8[1]), _bb8)
+                                           for a1, a2, a3, a4 in _ln8)
+                            if _old_hit:
+                                continue
+                            if any(seg_intersects_bbox((a1+_n8[0], a2+_n8[1], a3+_n8[0], a4+_n8[1]), _bb8)
+                                   for a1, a2, a3, a4 in _ln8):
+                                _hit_new8 = True; break
+                        if _hit_new8:
+                            continue
+                        insert_final[rn8] = _n8
+                        _s9 = _slide_text_along(rn8, final_rebar_lines(exclude=(rn8,)),
+                                                 [b_ for b_, n_y in all_placed_text_boxes(exclude_name=rn8)] +
+                                                 [cb_ for cb_, _sy in _circle_boxes()])
+                        if _s9 is not None:
+                            text_local_final[rn8] = _s9
+                            if not _core_cut9(rn8):
+                                _fixed8 = True; _mv9 += 1
+                                break
+                        insert_final[rn8] = _d0_8
+                        text_local_final[rn8] = _t0
+                    if _fixed8:
+                        break
+        if _mv9 == 0:
+            break
+
+    # ΤΕΛΙΚΟΣ ΕΛΕΓΧΟΣ ΦΟΥΡΚΕΤΑΣ (μετά ΑΠ' ΟΛΑ, ώστε καμία σειρά περασμάτων
+    # να μην τον προσπερνά - περίπτωση SLABBAR14): φουρκέτα-δύο-άκρων της
+    # οποίας τα ΣΚΕΛΗ κόβουν οποιοδήποτε τελικό κείμενο ενώ ο κορμός είναι
+    # καθαρός -> κατάρρευση στη γραμμή-κορμό (εγκεκριμένη εφεδρεία).
+    for rn9 in sorted(blocks):
+        if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', rn9) or rn9 in COLLAPSE_BARS:
+            continue
+        rd9 = insert_final.get(rn9, (0.0, 0.0))
+        if rd9[0] <= -49:
+            continue
+        ln9, _ = block_lines_local(blocks[rn9])
+        if len(ln9) < 3:
+            continue
+        co9 = _collapse_lines(ln9)
+        off9 = [max(abs(a1-b1), abs(a2-b2), abs(a3-b3), abs(a4-b4))
+                for (a1,a2,a3,a4),(b1,b2,b3,b4) in zip(ln9, co9)]
+        arm9 = [k for k,o in enumerate(off9) if o > 0.05]
+        if len(arm9) < 2:
+            continue
+        (au9, av9), (lo9, hi9) = spine_and_bounds(ln9)
+        ts9 = [((ln9[k][0]+ln9[k][2])/2*au9 + (ln9[k][1]+ln9[k][3])/2*av9) for k in arm9]
+        sp9 = hi9 - lo9
+        if not (min(ts9) < lo9 + 0.25*sp9 and max(ts9) > hi9 - 0.25*sp9):
+            continue
+        _armhit = False; _spinehit = False
+        for bb9, nb9 in all_placed_text_boxes(exclude_name=rn9):
+            for k,(x1,y1,x2,y2) in enumerate(ln9):
+                if seg_intersects_bbox((x1+rd9[0], y1+rd9[1], x2+rd9[0], y2+rd9[1]), bb9):
+                    if k in arm9: _armhit = True
+                    else: _spinehit = True
+        if _armhit and not _spinehit:
+            # ΦΡΟΥΡΟΣ: η ΚΑΤΑΡΡΕΥΜΕΝΗ γεωμετρία δεν επιτρέπεται να κόβει
+            # ΤΙΠΟΤΑ - ούτε κείμενα ούτε δείκτες πλακών (leukos/Π16-SLABBAR76:
+            # ο ευθυγραμμισμένος κορμός έπεφτε σε δείκτη). Αλλιώς η εφεδρεία
+            # δεν εφαρμόζεται.
+            _tgts9 = [bb for bb, _nb in all_placed_text_boxes(exclude_name=rn9)]
+            for sn9 in blocks:
+                if not re.match(r'FL-?\d+_SLAB\d+$', sn9):
+                    continue
+                _mb9 = slab_marker_boxes(blocks[sn9])
+                if not _mb9:
+                    continue
+                _sd9 = text_local_final.get(sn9, (0.0, 0.0))
+                for x9, y9, w9, h9, r9 in _mb9:
+                    _tgts9.append(text_bbox(x9+_sd9[0], y9+_sd9[1], w9, h9, r9))
+            _newhit = False
+            for x1,y1,x2,y2 in co9:
+                _sg9 = (x1+rd9[0], y1+rd9[1], x2+rd9[0], y2+rd9[1])
+                for bb in _tgts9:
+                    if seg_intersects_bbox(_sg9, bb):
+                        _newhit = True; break
+                if _newhit: break
+            if not _newhit:
+                pass  # ΑΠΕΝΕΡΓΟ κατόπιν εντολής: COLLAPSE_BARS.add(rn9)
 
     return insert_final, text_local_final
 
