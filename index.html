@@ -100,11 +100,20 @@
   .fl-row:last-child{ border-bottom:0; }
   .fl-n{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .fl-l{ opacity:.65; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .fl-s{ opacity:.85; white-space:nowrap; }
-  .fl-s.ok{ color:var(--ok); } .fl-s.bad{ color:var(--bad); }
+  .fl-s{ opacity:.85; white-space:nowrap; } .fl-s.ok{ color:var(--ok); } .fl-s.bad{ color:var(--bad); }
   .fl-d a{ text-decoration:none; font-size:15px; opacity:.85; }
   button.mini{ width:auto; margin-top:8px; padding:4px 10px; font-size:11.5px;
                background:transparent; border:1px solid rgba(255,255,255,.22); color:inherit; }
+  /* --- κανόνες ονοματοδοσίας --- */
+  .warn-note .rules{ margin:8px 0 0; padding:0; list-style:none; counter-reset:r;
+                     text-align:left; display:inline-block; }
+  .warn-note .rules li{ counter-increment:r; margin:4px 0; padding-left:22px; position:relative; }
+  .warn-note .rules li::before{ content:counter(r) ")"; position:absolute; left:0; color:#ff8a4c; font-weight:700; }
+  .warn-note code{ font-family:ui-monospace,Consolas,monospace; font-size:.92em;
+                   background:#00000038; padding:1px 6px; border-radius:4px; letter-spacing:.02em; }
+  .warn-note code .ph{ color:#7fe3a0; font-weight:700; }
+  /* --- η υπογραφή να μην ακουμπά τον πάτο --- */
+  .credit{ margin-bottom:34px; }
 </style>
 </head>
 <body>
@@ -113,8 +122,15 @@
   <div class="grid">
 
     <div class="warn-note" style="grid-column:1/-1;">
-      ⚠ <b>Προσοχή!</b> Τα DXF που εξάγεις από το FESPA πρέπει να είναι με Layers
-      <b>«Με χρώματα»</b> — <u>όχι</u> με Layers <b>«Με πένες»</b>.
+      ⚠ <b>Προσοχή!</b>
+      <ol class="rules">
+        <li>Τα DXF που εξάγεις από το FESPA πρέπει να είναι με Layers
+            <b>«Με χρώματα»</b> — <u>όχι</u> με Layers <b>«Με πένες»</b>.</li>
+        <li>Τα αρχεία DXF <b>ξυλοτύπων</b> να είναι της μορφής
+            <code><span class="ph">preffix</span>_or<span class="ph">*</span></code></li>
+        <li>Οι <b>λεπτομέρειες υποστυλωμάτων</b> να είναι της μορφής
+            <code><span class="ph">preffix</span>_Λεπτ_Υποστ_or<span class="ph">*</span></code></li>
+      </ol>
     </div>
 
     <div class="field" id="drop">
@@ -125,7 +141,7 @@
       <div class="target">
         <div class="tbox">
           <h2>Ρίξε εδώ ΟΛΑ τα DXF</h2>
-          <p>μία στάθμη ανά αρχείο · ονομασία <b>preffix_or-2 … preffix_or9</b><br>ξυλότυπος ASCII (blocks FLn_*) — παράγεται ένα ενοποιημένο DXF</p>
+          <p>ένα αρχείο ανά στάθμη · παράγεται ΕΝΑ ενοποιημένο DXF<br>ξυλότυποι &amp; λεπτομέρειες υποστυλωμάτων μαζί</p>
           <div class="fname" id="finfo"></div>
           <button type="button" id="pick" style="width:auto;margin-top:14px;padding:10px 20px;background:transparent;border:1.5px solid var(--y);color:var(--y);">Επιλογή αρχείων…</button>
         </div>
@@ -161,7 +177,7 @@
 <footer>Όλα τρέχουν τοπικά στη συσκευή σου — το σχέδιο δεν ανεβαίνει πουθενά.</footer>
 
 <div class="timing-note">
-  ⏱ Ο μέσος χρόνος παραγωγής τακτοποιημένου σχεδίου μίας στάθμης διαρκεί <b>μερικά λεπτά</b> — οι στάθμες τρέχουν <b>η μία μετά την άλλη</b>, οπότε πολλαπλασίασέ το επί το πλήθος των αρχείων.
+  ⏱ Ο μέσος χρόνος τακτοποίησης μίας στάθμης είναι <b>μερικά λεπτά</b> και οι στάθμες τρέχουν η μία μετά την άλλη. Τα αρχεία λεπτομερειών είναι ακαριαία (δεν περνούν από τακτοποίηση οπλισμού).
   <i>Keep calm and… wait.</i> Σε επόμενη έκδοση θα γίνει πιο γρήγορο.
 </div>
 
@@ -1650,6 +1666,21 @@ var CFG = {
   TITLE_LAYER: 'LEVEL_TITLE',   // layer τίτλων (ASCII - ασφαλές για R12)
   TITLE_COLOR: 7,
   STRUCT_RE: /^FL-?\d+_(COLUMN|BEAM|SLAB|FREENODE)\d*$/,
+  /* --- διατομές υποστυλωμάτων (_Λεπτ_Υποστ_) --- */
+  DETAIL_RE: /\u039b\u03b5\u03c0\u03c4[_ ]?\u03a5\u03c0\u03bf\u03c3\u03c4/i,   // «Λεπτ_Υποστ» στο όνομα αρχείου
+  SEC_RE: /^FL-?\d+_SECTION\d+$/,
+  DETAIL_BASE_X: 5.0,           // pick point (min x, min y) των λεπτομερειών
+  SEC_SCALE: 2.5,               // ΤΕΛΙΚΟ insert scale των διατομών (απόλυτο)
+  SEC_NAME_GAP: 0.20,           // κενό ονόματος από το περιεχόμενο (πριν το scale)
+  SEC_GX: 1.5, SEC_GY: 1.5,     // κενά μεταξύ διατομών (τελικές μονάδες)
+  SEC_LAYER_COLORS: {           // επιβολή χρώματος layer (ACI) στις λεπτομέρειες
+    'ironlabels_conline': 5,    //   5 = μπλε
+    'section_iron': 6           //   6 = magenta
+  },
+  SEC_MAX_ROWS: 4,              // ΠΟΤΕ πάνω από 4 σειρές
+  SEC_MAX_H: 26.0,              // ΑΠΑΡΑΒΑΤΟ: η ζώνη δεν ξεπερνά ποτέ αυτό
+  SEC_AREA_TOL: 1.25,           // πόσο «αραιότερο» από το πυκνότερο δυνατό δεχόμαστε
+                                //   για να κερδίσουμε μικρότερη ζώνη (+25%)
   MAX_NAME: 31                  // όριο μήκους ονόματος block σε R12
 };
 
@@ -1673,7 +1704,12 @@ function parseLevelName(filename) {
   base = base.replace(/_tidied$/i, '');
   var m = base.match(/^(.*?)_or_?(-?\d+)$/i);
   if (!m) return null;
-  return { prefix: m[1], level: parseInt(m[2], 10) };
+  var detail = CFG.DETAIL_RE.test(m[1]);
+  return {
+    prefix: m[1].replace(CFG.DETAIL_RE, '').replace(/[_\s]+$/, ''),
+    level: parseInt(m[2], 10),
+    kind: detail ? 'detail' : 'plan'
+  };
 }
 
 function levelTitle(n, levels) {
@@ -1882,13 +1918,16 @@ function analyzeFile(text) {
     if (ch[0].v.trim() !== 'INSERT') continue;
     var nm = val(ch, 2);
     var x = parseFloat(val(ch, 10) || '0'), y = parseFloat(val(ch, 20) || '0');
+    var sx = parseFloat(val(ch, 41) || '1'), sy = parseFloat(val(ch, 42) || '1');
     if (!nm) continue;
-    (f.inserts[nm] = f.inserts[nm] || []).push([isNaN(x) ? 0 : x, isNaN(y) ? 0 : y]);
+    (f.inserts[nm] = f.inserts[nm] || []).push([isNaN(x) ? 0 : x, isNaN(y) ? 0 : y,
+                                               isNaN(sx) || !sx ? 1 : sx, isNaN(sy) || !sy ? 1 : sy]);
   }
 
   /* bbox: φέρων σκελετός (για pick point) + ΟΛΑ (για extents) */
   var s = { minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
   var a = { minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
+  var sc = { minx: Infinity, miny: Infinity, maxx: -Infinity, maxy: -Infinity };
   function put(box, x, y) {
     if (x < box.minx) box.minx = x; if (x > box.maxx) box.maxx = x;
     if (y < box.miny) box.miny = y; if (y > box.maxy) box.maxy = y;
@@ -1897,13 +1936,18 @@ function analyzeFile(text) {
     var blk = f.blocks[b];
     var pos = f.inserts[blk.name] || [[0, 0]];
     var isStruct = CFG.STRUCT_RE.test(blk.name) && blk.name.indexOf('TEXT') < 0;
+    var isSec = CFG.SEC_RE.test(blk.name);
     var lines = linesOfBlock(blk);
     for (var p = 0; p < pos.length; p++) {
-      var ox = pos[p][0] - blk.bx, oy = pos[p][1] - blk.by;
+      var px = pos[p][0], py = pos[p][1], kx = pos[p][2] || 1, ky = pos[p][3] || 1;
+      var TX = function (v) { return px + kx * (v - blk.bx); };
+      var TY = function (v) { return py + ky * (v - blk.by); };
       for (var l = 0; l < lines.length; l++) {
         var q = lines[l];
-        put(a, q[0] + ox, q[1] + oy); put(a, q[2] + ox, q[3] + oy);
-        if (isStruct) { put(s, q[0] + ox, q[1] + oy); put(s, q[2] + ox, q[3] + oy); }
+        var x1 = TX(q[0]), y1 = TY(q[1]), x2 = TX(q[2]), y2 = TY(q[3]);
+        put(a, x1, y1); put(a, x2, y2);
+        if (isStruct) { put(s, x1, y1); put(s, x2, y2); }
+        if (isSec) { put(sc, x1, y1); put(sc, x2, y2); }
       }
     }
   }
@@ -1913,12 +1957,15 @@ function analyzeFile(text) {
       put(a, parseFloat(val(c2, 10)), parseFloat(val(c2, 20)));
       put(a, parseFloat(val(c2, 11)), parseFloat(val(c2, 21)));
       if (CFG.STRUCT_RE.test('') === false) { /* top-level lines: μόνο στα extents */ }
-    } else if (t === 'INSERT' || t === 'MTEXT' || t === 'TEXT' || t === 'CIRCLE' || t === 'ARC') {
+    } else if (t === 'MTEXT' || t === 'TEXT' || t === 'CIRCLE' || t === 'ARC') {
+      /* τα INSERT ΔΕΝ μπαίνουν στα όρια: το σημείο εισαγωγής μπορεί να είναι
+         πολύ έξω από τη γεωμετρία (η γεωμετρία μετριέται ήδη μέσω των blocks) */
       var xx = parseFloat(val(c2, 10)), yy = parseFloat(val(c2, 20));
       if (!isNaN(xx) && !isNaN(yy)) put(a, xx, yy);
     }
   }
   f.structBox = isFinite(s.minx) ? s : null;
+  f.secBox = isFinite(sc.minx) ? sc : null;
   f.allBox = isFinite(a.minx) ? a : null;
   f.codepage = (function () {
     for (var i9 = 0; i9 + 1 < f.header.length; i9++)
@@ -1946,10 +1993,299 @@ function analyzeFile(text) {
     var th = val(f.tables[q2].head, 5);
     if (th) f.tableHead[f.tables[q2].type] = th;
   }
+  f.plotStyle = (function () {
+    for (var t = 0; t < f.tables.length; t++) {
+      if (f.tables[t].type !== 'LAYER') continue;
+      for (var e2 = 0; e2 < f.tables[t].entries.length; e2++) {
+        var v2 = val(f.tables[t].entries[e2].chunk, 390);
+        if (v2) return v2;
+      }
+    }
+    return null;
+  })();
   f.objHandles = {};                      // handles της OBJECTS (για 390/340/350)
   var objs = sec.OBJECTS || [];
   for (var q3 = 0; q3 < objs.length; q3++) if (objs[q3].c === 5) f.objHandles[objs[q3].v.trim().toUpperCase()] = 1;
   return f;
+}
+
+/* =====================================================================
+   ΔΙΑΤΑΞΗ ΔΙΑΤΟΜΩΝ ΥΠΟΣΤΥΛΩΜΑΤΩΝ (_Λεπτ_Υποστ_)
+   1) ομαδοποίηση: κάθε διατομή με τα σίδερα/συνδετήρες/ετικέτες/όνομά της
+   2) το όνομα έρχεται ακριβώς πάνω από το set (ποτέ πάνω σε ironlabels)
+   3) ομοιοθεσία ×2.5 μέσω insert scale - ΚΑΜΙΑ αλλαγή στη γεωμετρία των blocks
+   4) στοίχιση σε 3 ή 4 σειρές (όποιο βγαίνει πιο τετράγωνο), με σειρά
+      ανάγνωσης το όνομα Κ1, Κ2, … αριστερά→δεξιά
+   ===================================================================== */
+function _secAnalyze(f) {
+  var ins = {}, box = {}, pts = {};
+  for (var e = 0; e < f.ents.length; e++) {
+    var ch = f.ents[e];
+    if (ch[0].v.trim() !== 'INSERT') continue;
+    var gv = function (k) { for (var i = 1; i < ch.length; i++) if (ch[i].c === k) return parseFloat(ch[i].v); return null; };
+    ins[val(ch, 2)] = { x: gv(10) || 0, y: gv(20) || 0, sx: gv(41) || 1, sy: gv(42) || 1 };
+  }
+  for (var b = 0; b < f.blocks.length; b++) {
+    var blk = f.blocks[b], i2 = ins[blk.name];
+    if (!i2) continue;
+    var B = { mnx: 1e18, mny: 1e18, mxx: -1e18, mxy: -1e18 }, P = [];
+    for (var q = 0; q < blk.body.length; q++) {
+      var c2 = blk.body[q], typ = c2[0].v.trim();
+      for (var k = 1; k < c2.length - 1; k++) {
+        var cd = c2[k].c;
+        if (cd < 10 || cd > 13 || c2[k + 1].c !== cd + 10) continue;
+        var x = parseFloat(c2[k].v), y = parseFloat(c2[k + 1].v);
+        if (isNaN(x) || isNaN(y)) continue;
+        var X = i2.x + i2.sx * (x - blk.bx), Y = i2.y + i2.sy * (y - blk.by);
+        P.push([X, Y, typ]);
+        if (X < B.mnx) B.mnx = X; if (X > B.mxx) B.mxx = X;
+        if (Y < B.mny) B.mny = Y; if (Y > B.mxy) B.mxy = Y;
+      }
+    }
+    if (B.mnx < 1e17) { box[blk.name] = B; pts[blk.name] = P; }
+  }
+  return { ins: ins, box: box, pts: pts };
+}
+function _bdist(B, x, y) {
+  var dx = Math.max(B.mnx - x, 0, x - B.mxx), dy = Math.max(B.mny - y, 0, y - B.mxy);
+  return Math.sqrt(dx * dx + dy * dy);
+}
+function _bin(B, x, y, t) { return x >= B.mnx - t && x <= B.mxx + t && y >= B.mny - t && y <= B.mxy + t; }
+function _bgrow(A, B) {
+  return { mnx: Math.min(A.mnx, B.mnx), mny: Math.min(A.mny, B.mny), mxx: Math.max(A.mxx, B.mxx), mxy: Math.max(A.mxy, B.mxy) };
+}
+function _decEsc(s) {
+  return String(s).replace(/\\U\+([0-9A-Fa-f]{4})/g, function (_m, h) { return String.fromCharCode(parseInt(h, 16)); });
+}
+
+function layoutSections(text, cfgOverride) {
+  var cfg = {}; for (var k0 in CFG) cfg[k0] = CFG[k0];
+  if (cfgOverride) for (var k1 in cfgOverride) cfg[k1] = cfgOverride[k1];
+  var f = analyzeFile(text), S = _secAnalyze(f);
+  var pre = 'FL0_';
+  for (var pi = 0; pi < f.blocks.length; pi++) {
+    var pm = f.blocks[pi].name.match(/^(FL-?\d+_)SECTION\d+$/);
+    if (pm) { pre = pm[1]; break; }
+  }
+  var esc = function (s2) { return s2.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); };
+  var numOf = function (n) { var m = n.match(/(\d+)$/); return m ? +m[1] : -1; };
+  var anchors = [];
+  for (var a = 0; a < f.blocks.length; a++)
+    if (cfg.SEC_RE.test(f.blocks[a].name) && S.box[f.blocks[a].name]) anchors.push(f.blocks[a].name);
+  if (!anchors.length) throw new Error('Δεν βρέθηκαν διατομές (blocks FLn_SECTIONn) — είναι όντως αρχείο λεπτομερειών;');
+
+  var G = {}, warn = [];
+  anchors.forEach(function (n) {
+    var B = S.box[n];
+    G[n] = { key: n, members: [n], content: { mnx: B.mnx, mny: B.mny, mxx: B.mxx, mxy: B.mxy }, texts: [] };
+  });
+  var nearest = function (x, y) {
+    var best = null, bd = 1e18;
+    anchors.forEach(function (m) { var d = _bdist(S.box[m], x, y); if (d < bd) { bd = d; best = m; } });
+    return best;
+  };
+  var names = Object.keys(S.box);
+
+  ['SECTION_IRON', 'SECTION_STIRRUP'].forEach(function (cat) {
+    var re = new RegExp('^' + esc(pre) + cat + '\\d+$');
+    names.filter(function (n) { return re.test(n); }).forEach(function (n) {
+      var B = S.box[n], cx = (B.mnx + B.mxx) / 2, cy = (B.mny + B.mxy) / 2;
+      var hit = anchors.filter(function (m) { return _bin(S.box[m], cx, cy, 0.05); });
+      var g = G[hit.length === 1 ? hit[0] : nearest(cx, cy)];
+      g.members.push(n); g.content = _bgrow(g.content, B);
+    });
+  });
+
+  var reIdx = new RegExp('^' + esc(pre) + 'SECTION_INDEX\\d+$');
+  names.filter(function (n) { return reIdx.test(n); }).forEach(function (n) {
+    var hit = {}, lp = S.pts[n].filter(function (p) { return p[2] === 'LINE'; });
+    lp.forEach(function (p) { anchors.forEach(function (m) { if (_bin(S.box[m], p[0], p[1], 0.02)) hit[m] = 1; }); });
+    var hs = Object.keys(hit), key;
+    if (hs.length === 1) key = hs[0];
+    else {
+      var B2 = S.box[n];
+      var c = lp[0] || [(B2.mnx + B2.mxx) / 2, (B2.mny + B2.mxy) / 2];
+      key = nearest(c[0], c[1]);
+    }
+    G[key].members.push(n); G[key].content = _bgrow(G[key].content, S.box[n]);
+  });
+
+  var reTxt = new RegExp('^' + esc(pre) + 'SECTION_TEXT\\d+$');
+  names.filter(function (n) { return reTxt.test(n); }).forEach(function (n) {
+    var own = pre + 'SECTION' + numOf(n), B = S.box[n];
+    var key = G[own] ? own : nearest((B.mnx + B.mxx) / 2, (B.mny + B.mxy) / 2);
+    if (!G[own]) warn.push('Το ' + own.replace(pre, '') + ' είναι κενό (χωρίς περίγραμμα) — το όνομά του εντάχθηκε στο ' + key.replace(pre, '') + '.');
+    G[key].members.push(n); G[key].texts.push(n);
+  });
+
+  /* κανόνας 2 */
+  var moves = {};
+  Object.keys(G).forEach(function (key) {
+    var g = G[key];
+    g.box = { mnx: g.content.mnx, mny: g.content.mny, mxx: g.content.mxx, mxy: g.content.mxy };
+    /* Τα ονόματα του set μπαίνουν όσο πιο χαμηλά γίνεται πάνω από το
+       περιεχόμενο. Ανεβαίνουν ΜΟΝΟ αν πέφτουν πάνω σε άλλο όνομα του ίδιου
+       set (πολλά ονόματα σε ενιαίο περίγραμμα) - όχι κατά κανόνα. */
+    var base = g.box.mxy + cfg.SEC_NAME_GAP, placed = [];
+    var order2 = g.texts.slice().sort(function (p, q) { return S.box[p].mnx - S.box[q].mnx; });
+    order2.forEach(function (t) {
+      var T = S.box[t], y = base, moved = true, guard = 0;
+      while (moved && guard++ < 50) {
+        moved = false;
+        for (var z = 0; z < placed.length; z++) {
+          var Q = placed[z];
+          var ovX = T.mnx < Q.mxx + cfg.SEC_NAME_GAP && T.mxx > Q.mnx - cfg.SEC_NAME_GAP;
+          var ovY = y < Q.mxy + cfg.SEC_NAME_GAP && (y + (T.mxy - T.mny)) > Q.mny;
+          if (ovX && ovY) { y = Q.mxy + cfg.SEC_NAME_GAP; moved = true; }
+        }
+      }
+      var dy = y - T.mny;
+      moves[t] = [0, dy];
+      placed.push({ mnx: T.mnx, mxx: T.mxx, mny: T.mny + dy, mxy: T.mxy + dy });
+      g.box = _bgrow(g.box, { mnx: T.mnx, mxx: T.mxx, mny: T.mny + dy, mxy: T.mxy + dy });
+    });
+  });
+
+  var label = function (key) {
+    var t = G[key].texts[0]; if (!t) return '';
+    for (var i = 0; i < f.blocks.length; i++) {
+      if (f.blocks[i].name !== t) continue;
+      var body = f.blocks[i].body;
+      for (var j = 0; j < body.length; j++) {
+        if (body[j][0].v.trim() !== 'MTEXT') continue;
+        if ((val(body[j], 8) || '') !== 'section_prefix_name') continue;
+        return _decEsc(val(body[j], 1) || '');
+      }
+    }
+    return '';
+  };
+  var keys = Object.keys(G);
+  keys.sort(function (x, y) {
+    var mx = label(x).match(/(\d+)/), my = label(y).match(/(\d+)/);
+    return (mx ? +mx[1] : 9999) - (my ? +my[1] : 9999);
+  });
+
+  /* ΤΕΛΙΚΟ scale = cfg.SEC_SCALE (απόλυτο). Τα INSERT του FESPA έρχονται με
+     δική τους κλίμακα (εδώ 2), οπότε ο συντελεστής ομοιοθεσίας είναι
+     SEC_SCALE / (η επικρατούσα αρχική κλίμακα) - ίδιος για ΟΛΑ τα blocks,
+     ώστε να μην αλλοιωθούν οι μεταξύ τους αναλογίες. */
+  var tally = {};
+  Object.keys(S.ins).forEach(function (n) {
+    var v = Math.abs(S.ins[n].sx) || 1; tally[v] = (tally[v] || 0) + 1;
+  });
+  var baseScale = 1, bestN = -1;
+  Object.keys(tally).forEach(function (v) { if (tally[v] > bestN) { bestN = tally[v]; baseScale = parseFloat(v); } });
+  var K = cfg.SEC_SCALE / (baseScale || 1);
+  var items = keys.map(function (key) {
+    return { k: key, w: (G[key].box.mxx - G[key].box.mnx) * K, h: (G[key].box.mxy - G[key].box.mny) * K };
+  });
+  /* ΣΤΟΙΧΙΣΗ - ακριβής βελτιστοποίηση σε ΟΛΕΣ τις κατατμήσεις.
+     Η σειρά Κ1→Κν διατηρείται, άρα κάθε σειρά είναι συνεχόμενο κομμάτι.
+     Κανόνας (με αυτή τη σειρά προτεραιότητας):
+       1. η ζώνη ΔΕΝ ξεπερνά ΠΟΤΕ το SEC_MAX_H·
+       2. από όσες λύσεις σπαταλούν έως SEC_AREA_TOL× το εμβαδόν της
+          πυκνότερης δυνατής, κρατάμε τη ΜΙΚΡΟΤΕΡΗ ζώνη·
+       3. σε ισοπαλία, το στενότερο φύλλο.
+     Το βήμα 2 είναι που εμποδίζει τη «λύση-λωρίδα»: μία σειρά δίνει πάντα
+     την ελάχιστη ζώνη, αλλά με τεράστιο πλάτος και σπατάλη χώρου. */
+  var n = items.length;
+  function rowW(i, j) { var w = -cfg.SEC_GX; for (var t = i; t < j; t++) w += items[t].w + cfg.SEC_GX; return w; }
+  function rowH(i, j) { var h = 0; for (var t = i; t < j; t++) if (items[t].h > h) h = items[t].h; return h; }
+
+  var cands = [];
+  (function enumerate(start, cuts) {
+    if (cuts.length > cfg.SEC_MAX_ROWS - 1) return;
+    if (start === n) {
+      var parts = [], p = 0;
+      cuts.concat([n]).forEach(function (c) { parts.push([p, c]); p = c; });
+      var W = 0, H = -cfg.SEC_GY;
+      parts.forEach(function (q) { var w = rowW(q[0], q[1]); if (w > W) W = w; H += rowH(q[0], q[1]) + cfg.SEC_GY; });
+      cands.push({ R: parts.length, W: W, H: H, area: W * H, rows: parts });
+      return;
+    }
+    for (var c2 = start + 1; c2 <= n; c2++) {
+      if (c2 < n) enumerate(c2, cuts.concat([c2]));
+      else enumerate(n, cuts);
+    }
+  })(0, []);
+
+  var fits = cands.filter(function (x) { return x.H <= cfg.SEC_MAX_H + 1e-9; });
+  var best, warnFit = null;
+  if (!fits.length) {
+    best = cands.reduce(function (a2, b2) { return b2.H < a2.H ? b2 : a2; });
+    warnFit = 'Δεν χωράει σε ζώνη ' + cfg.SEC_MAX_H + ': το ελάχιστο εφικτό ύψος είναι ' + best.H.toFixed(1) +
+              ' (η ψηλότερη διατομή από μόνη της είναι ' +
+              Math.max.apply(null, items.map(function (x) { return x.h; })).toFixed(1) + ').';
+  } else {
+    var minArea = fits.reduce(function (a3, b3) { return b3.area < a3.area ? b3 : a3; }).area;
+    var dense = fits.filter(function (x) { return x.area <= minArea * cfg.SEC_AREA_TOL + 1e-9; });
+    dense.sort(function (x, y) { return (x.H - y.H) || (x.W - y.W); });
+    best = dense[0];
+  }
+
+  var place = {}, yy = best.H;
+  best.rows.forEach(function (p) {
+    var rh = rowH(p[0], p[1]), xx = 0;
+    for (var t3 = p[0]; t3 < p[1]; t3++) { place[items[t3].k] = [xx, yy - rh]; xx += items[t3].w + cfg.SEC_GX; }
+    yy -= rh + cfg.SEC_GY;
+  });
+  if (warnFit) warn.push(warnFit);
+
+  var newIns = {};
+  keys.forEach(function (key) {
+    var g = G[key], p = place[key], B = g.box;
+    g.members.forEach(function (m) {
+      var i3 = S.ins[m]; if (!i3) return;
+      var mv = moves[m] || [0, 0];
+      newIns[m] = { x: p[0] + K * (i3.x + mv[0] - B.mnx), y: p[1] + K * (i3.y + mv[1] - B.mny), sx: i3.sx * K, sy: i3.sy * K };
+    });
+  });
+
+  var P = f.pairs, a0 = -1, b0 = -1;
+  for (var w = 0; w < P.length; w++) if (P[w].c === 2 && P[w].v.trim() === 'ENTITIES') { a0 = w + 1; break; }
+  for (var w2 = a0; w2 < P.length; w2++) if (P[w2].c === 0 && P[w2].v.trim() === 'ENDSEC') { b0 = w2; break; }
+  var flat = [], nMoved = 0;
+  chunkByZero(P.slice(a0, b0)).forEach(function (ch) {
+    if (ch[0].v.trim() !== 'INSERT') { flat = flat.concat(ch); return; }
+    var n = newIns[val(ch, 2)];
+    if (!n) { flat = flat.concat(ch); return; }
+    nMoved++;
+    flat = flat.concat(ch.map(function (p) {
+      if (p.c === 10) return mk(10, num(n.x));
+      if (p.c === 20) return mk(20, num(n.y));
+      if (p.c === 41) return mk(41, num(n.sx));
+      if (p.c === 42) return mk(42, num(n.sy));
+      if (p.c === 43) return mk(43, num(n.sx));
+      return p;
+    }));
+  });
+  var NP = P.slice(0, a0).concat(flat, P.slice(b0));
+
+  /* χρώματα layer: αλλάζει ΜΟΝΟ ο κωδικός 62 της εγγραφής LAYER - καμία
+     οντότητα αυτών των layers δεν έχει δικό της χρώμα, οπότε ισχύει παντού */
+  var recolored = [];
+  for (var z1 = 0; z1 < NP.length - 1; z1++) {
+    if (!(NP[z1].c === 0 && NP[z1].v.trim() === 'LAYER')) continue;
+    var nm2 = null, at62 = -1;
+    for (var z2 = z1 + 1; z2 < NP.length && NP[z2].c !== 0; z2++) {
+      if (NP[z2].c === 2 && nm2 === null) nm2 = NP[z2].v.trim();
+      if (NP[z2].c === 62) at62 = z2;
+    }
+    if (nm2 && at62 >= 0 && cfg.SEC_LAYER_COLORS.hasOwnProperty(nm2)) {
+      NP[at62] = mk(62, cfg.SEC_LAYER_COLORS[nm2]);
+      recolored.push(nm2 + '→' + cfg.SEC_LAYER_COLORS[nm2]);
+    }
+  }
+
+  return {
+    text: ser(NP, f.eol), rows: best.R, width: best.W, height: best.H,
+    baseScale: baseScale, finalScale: cfg.SEC_SCALE, factor: K,
+    order: keys.map(label), moved: nMoved, warnings: warn, recolored: recolored,
+    groups: keys.map(function (key) {
+      return { key: key.replace(pre, ''), label: label(key), members: G[key].members.length,
+               w: (G[key].box.mxx - G[key].box.mnx) * K, h: (G[key].box.mxy - G[key].box.mny) * K };
+    })
+  };
 }
 
 /* ---------- κύρια συνάρτηση ---------- */
@@ -1963,7 +2299,8 @@ function mergeLevels(items, cfgOverride) {
   for (var i = 0; i < items.length; i++) {
     var lv = parseLevelName(items[i].name);
     if (!lv) { warnings.push('Παραλείπεται (δεν ταιριάζει με …_orN.dxf): ' + items[i].name); continue; }
-    recs.push({ name: items[i].name, prefix: lv.prefix, level: lv.level, f: analyzeFile(items[i].text) });
+    recs.push({ name: items[i].name, prefix: lv.prefix, level: lv.level,
+                kind: items[i].kind || lv.kind || 'plan', f: analyzeFile(items[i].text) });
   }
   if (!recs.length) throw new Error('Κανένα αρχείο με έγκυρο όνομα στάθμης (…_or-2 … _or9).');
 
@@ -1972,12 +2309,19 @@ function mergeLevels(items, cfgOverride) {
   for (var r = 0; r < recs.length; r++) if (prefixes.indexOf(recs[r].prefix) < 0) prefixes.push(recs[r].prefix);
   if (prefixes.length > 1) warnings.push('Βρέθηκαν πολλά προθέματα: ' + prefixes.join(', '));
 
-  recs.sort(function (a, b) { return a.level - b.level; });
-  var levels = recs.map(function (x) { return x.level; });
-  for (var d = 1; d < levels.length; d++) {
-    if (levels[d] === levels[d - 1]) throw new Error('Διπλή στάθμη or' + levels[d] + ' - δύο αρχεία για την ίδια στάθμη.');
-    if (levels[d] !== levels[d - 1] + 1) warnings.push('Κενό στη σειρά σταθμών: μετά το or' + levels[d - 1] + ' ακολουθεί or' + levels[d] + '.');
-  }
+  recs.sort(function (a, b) { return (a.level - b.level) || (a.kind === 'plan' ? -1 : 1); });
+  var seenLK = {};
+  recs.forEach(function (r) {
+    var k = r.level + '|' + r.kind;
+    if (seenLK[k]) throw new Error('Δύο αρχεία ' + (r.kind === 'detail' ? 'λεπτομερειών' : 'ξυλοτύπου') + ' για τη στάθμη or' + r.level + '.');
+    seenLK[k] = 1;
+  });
+  var levels = [];
+  recs.forEach(function (r) { if (levels.indexOf(r.level) < 0) levels.push(r.level); });
+  levels.sort(function (a, b) { return a - b; });
+  for (var d = 1; d < levels.length; d++)
+    if (levels[d] !== levels[d - 1] + 1)
+      warnings.push('Κενό στη σειρά σταθμών: μετά το or' + levels[d - 1] + ' ακολουθεί or' + levels[d] + '.');
   /* ---- handles: ο πρώτος (χαμηλότερη στάθμη) είναι ο «οικοδεσπότης».
          Όλων των υπολοίπων τα handles ξαναριθμούνται ώστε να μη διπλοχτυπήσουν. ---- */
   var host = recs[0].f;
@@ -1987,22 +2331,69 @@ function mergeLevels(items, cfgOverride) {
   var nextH = seed + 1;
   function newHandle() { return (nextH++).toString(16).toUpperCase(); }
   for (var s2 = 0; s2 < recs.length; s2++) recs[s2].hmap = {};
+  var hostPS = host.plotStyle;
+  /* ευρετήριο πινάκων του τελικού: τύπος -> {όνομα: handle} */
+  var tableIndex = {};
+  if (hasH) {
+    host.tables.forEach(function (t) {
+      var m = tableIndex[t.type] = {};
+      t.entries.forEach(function (e) { var h = val(e.chunk, 5); if (h) m[e.name] = h.trim(); });
+    });
+  }
   function remapH(rec, v) {
     var k = String(v).trim().toUpperCase();
     if (!rec.hmap[k]) rec.hmap[k] = newHandle();
     return rec.hmap[k];
   }
-  /* αντικατάσταση handles σε ένα chunk (μόνο για ΜΗ-οικοδεσπότες) */
+  /* αντικατάσταση handles/αναφορών σε ένα chunk (μόνο για ΜΗ-οικοδεσπότες) */
   function fixH(rec, chunk) {
     if (!hasH || rec === recs[0]) return chunk;
-    var out = null;
+    var out = [];
     for (var i7 = 0; i7 < chunk.length; i7++) {
-      if (chunk[i7].c === 5 || chunk[i7].c === 105) {
-        if (!out) out = chunk.slice();
-        out[i7] = mk(chunk[i7].c, remapH(rec, chunk[i7].v));
+      var p = chunk[i7];
+      /* ομάδες 102 {…} δείχνουν σε OBJECTS που δεν μεταφέρονται - φεύγουν */
+      if (p.c === 102 && p.v.trim().charAt(0) === '{') {
+        while (i7 < chunk.length && !(chunk[i7].c === 102 && chunk[i7].v.trim() === '}')) i7++;
+        continue;
+      }
+      if (p.c === 5 || p.c === 105) { out.push(mk(p.c, remapH(rec, p.v))); continue; }
+      if (p.c === 360) continue;                       // extension dictionary
+      if (p.c === 390) {                               // PlotStyleName: ΠΟΤΕ δεν λείπει
+        out.push(mk(390, hostPS || p.v.trim()));
+        continue;
+      }
+      if (p.c === 330 || p.c === 340 || p.c === 350 || p.c === 347) {
+        var tk = p.v.trim().toUpperCase();
+        if (rec.hmap[tk]) out.push(mk(p.c, rec.hmap[tk]));
+        continue;                                      // αλλιώς κόβεται (δείχνει σε ό,τι δεν μεταφέρθηκε)
+      }
+      out.push(p);
+    }
+    return out;
+  }
+  /* ΠΡΟΕΡΓΑΣΙΑ: πρώτα οι εγγραφές πινάκων (τα διπλά ονόματα δείχνουν στου
+     οικοδεσπότη), μετά όλα τα υπόλοιπα handles - ώστε κάθε αναφορά να λύνεται. */
+  function prepHandles() {
+    if (!hasH) return;
+    for (var r1 = 1; r1 < recs.length; r1++) {
+      var rec = recs[r1];
+      rec.f.tables.forEach(function (t) {
+        var idx = tableIndex[t.type] || (tableIndex[t.type] = {});
+        t.entries.forEach(function (e) {
+          var h = val(e.chunk, 5); if (!h) return;
+          var nm = (t.type === 'BLOCK_RECORD' && rec.rename[e.name]) ? rec.rename[e.name] : e.name;
+          var k = h.trim().toUpperCase();
+          if (idx[nm]) rec.hmap[k] = idx[nm];           // διπλό όνομα -> handle του τελικού
+          else { rec.hmap[k] = newHandle(); idx[nm] = rec.hmap[k]; }
+        });
+      });
+      for (var q9 = 0; q9 < rec.f.pairs.length; q9++) {
+        var pp = rec.f.pairs[q9];
+        if (pp.c !== 5 && pp.c !== 105) continue;
+        var kk = pp.v.trim().toUpperCase();
+        if (!rec.hmap[kk]) rec.hmap[kk] = newHandle();
       }
     }
-    return out || chunk;
   }
   if (host.acadver && host.acadver !== 'AC1009' && !hasH)
     warnings.push('Έκδοση ' + host.acadver + ' χωρίς handles - έλεγξε το αποτέλεσμα στο CAD.');
@@ -2017,17 +2408,23 @@ function mergeLevels(items, cfgOverride) {
       var b = f.blocks[bi], h = hashChunks(f.blocks[bi].body);
       if (blockSeen.hasOwnProperty(b.name)) {
         if (blockSeen[b.name] === h) { b.skip = true; continue; }   // ίδιο block, γράφεται μία φορά
-        var suffix = '$L' + String(rec.level).replace('-', 'M');
+        var suffix = '$' + (rec.kind === 'detail' ? 'D' : 'L') + String(rec.level).replace('-', 'M');
         var nn = (b.name.length + suffix.length > cfg.MAX_NAME)
           ? b.name.slice(0, cfg.MAX_NAME - suffix.length) + suffix : b.name + suffix;
         var g = 1; while (blockSeen.hasOwnProperty(nn)) { nn = nn.slice(0, cfg.MAX_NAME - 2) + '$' + (g++); }
         rec.rename[b.name] = nn;
-        warnings.push('Σύγκρουση ονόματος block «' + b.name + '» (or' + rec.level + ') → μετονομάστηκε σε «' + nn + '».');
+        rec.nRenamed = (rec.nRenamed || 0) + 1;
+        if (rec.nRenamed === 1) rec.firstRenamed = b.name + ' → ' + nn;
         b.newName = nn;
       }
       blockSeen[b.newName || b.name] = h;
     }
+    if (rec.nRenamed)
+      warnings.push(rec.nRenamed + ' blocks του ' + rec.name + ' είχαν όνομα που χρησιμοποιείται ήδη με άλλο περιεχόμενο ' +
+                    'και μετονομάστηκαν (π.χ. ' + rec.firstRenamed + ') - τα INSERT ενημερώθηκαν.');
   }
+
+  prepHandles();
 
   function applyRename(chunk, ren) {
     if (chunk[0].v.trim() !== 'INSERT') return chunk;
@@ -2082,13 +2479,7 @@ function mergeLevels(items, cfgOverride) {
         chunk2 = fixH(rcT, chunk2);
         if (hasH) {
           var ownH = host.tableHead[TT[t2].type];
-          chunk2 = chunk2.filter(function (p) {
-            /* 390 = plotstyle στην OBJECTS: κρατιέται μόνο αν υπάρχει στον οικοδεσπότη */
-            return !(p.c === 390 && !host.objHandles[p.v.trim().toUpperCase()]);
-          }).map(function (p) {
-            /* 330 = ιδιοκτήτης (η κεφαλίδα του πίνακα) -> η κεφαλίδα του οικοδεσπότη */
-            return (p.c === 330 && ownH) ? mk(330, ownH) : p;
-          });
+          if (ownH) chunk2 = chunk2.map(function (p) { return p.c === 330 ? mk(330, ownH) : p; });
         }
         dst.entries.push({ name: nm2, chunk: chunk2 });
       }
@@ -2118,7 +2509,7 @@ function mergeLevels(items, cfgOverride) {
   /* ---- πρότυπο MTEXT (κληρονομεί style/κωδικούς του σχεδίου) ---- */
   var tmpl = null;
   (function () {
-    for (var a1 = 0; a1 < recs.length && !tmpl; a1++) {
+    for (var a1 = 0; a1 < 1 && !tmpl; a1++) {          // μόνο ο οικοδεσπότης
       var ff = recs[a1].f;
       for (var a2 = 0; a2 < ff.ents.length; a2++) if (ff.ents[a2][0].v.trim() === 'MTEXT') { tmpl = ff.ents[a2]; return; }
       for (var a3 = 0; a3 < ff.blocks.length; a3++)
@@ -2189,11 +2580,15 @@ function mergeLevels(items, cfgOverride) {
   var nIn = 0, nOut = 0;
   for (var m = 0; m < recs.length; m++) {
     var R = recs[m], F = R.f;
-    var pick = F.structBox || F.allBox;
+    var isDet = R.kind === 'detail';
+    var pick = (isDet ? F.secBox : F.structBox) || F.allBox;
     if (!pick) throw new Error('Δεν βρέθηκε γεωμετρία στο ' + R.name);
-    if (!F.structBox) warnings.push('Στο ' + R.name + ' δεν βρέθηκαν blocks φέροντος σκελετού - το pick point υπολογίστηκε από όλη τη γεωμετρία.');
+    if (isDet ? !F.secBox : !F.structBox)
+      warnings.push('Στο ' + R.name + ' δεν βρέθηκαν blocks ' + (isDet ? 'διατομών' : 'φέροντος σκελετού') +
+                    ' - το pick point υπολογίστηκε από όλη τη γεωμετρία.');
     var ty = (R.level - cfg.BASE_LEVEL) * cfg.STEP_Y;
-    var dx = cfg.BASE_X - pick.maxx, dy = ty - pick.miny;
+    var bx = isDet ? cfg.DETAIL_BASE_X : cfg.BASE_X;
+    var dx = (isDet ? bx - pick.minx : bx - pick.maxx), dy = ty - pick.miny;
     var hasRen2 = Object.keys(R.rename).length > 0;
 
     for (var n = 0; n < F.ents.length; n++) {
@@ -2203,6 +2598,10 @@ function mergeLevels(items, cfgOverride) {
       var mv = translateChunk(fixH(R, hasRen2 ? applyRename(ch2, R.rename) : ch2), dx, dy);
       outEnts = outEnts.concat(mv); nOut++;
     }
+    var hgt = (F.allBox ? F.allBox.maxy - F.allBox.miny : 0);
+    if (hgt > cfg.STEP_Y)
+      warnings.push('Το ' + R.name + ' έχει ύψος ' + hgt.toFixed(1) + ' > βήμα ' + cfg.STEP_Y +
+                    ' - θα ακουμπήσει την επόμενη στάθμη.');
     var ab = F.allBox || pick;
     if (ab.minx + dx < ext.minx) ext.minx = ab.minx + dx;
     if (ab.miny + dy < ext.miny) ext.miny = ab.miny + dy;
@@ -2210,14 +2609,14 @@ function mergeLevels(items, cfgOverride) {
     if (ab.maxy + dy > ext.maxy) ext.maxy = ab.maxy + dy;
 
     var title = levelTitle(R.level, levels);
-    if (cfg.TITLE) {
+    if (cfg.TITLE && !isDet) {
       var tx = pick.minx + dx, tyy = ty + cfg.TITLE_DY;
       outEnts = outEnts.concat(titleEntity(tx, tyy, title));
       if (tyy - cfg.TITLE_H < ext.miny) ext.miny = tyy - cfg.TITLE_H;
     }
     report.push({
-      file: R.name, level: R.level, title: title,
-      pick: [pick.maxx, pick.miny], target: [cfg.BASE_X, ty],
+      file: R.name, level: R.level, title: isDet ? '(λεπτομέρειες)' : title, kind: R.kind,
+      pick: [isDet ? pick.minx : pick.maxx, pick.miny], target: [bx, ty],
       delta: [dx, dy], entities: F.ents.length, blocks: F.blocks.length
     });
   }
@@ -2273,13 +2672,17 @@ function mergeLevels(items, cfgOverride) {
   return {
     text: ser(P, recs[0].f.eol),
     report: report, warnings: warnings,
-    counts: { entitiesIn: nIn, entitiesOut: nOut, titles: cfg.TITLE ? recs.length : 0 },
+    counts: { entitiesIn: nIn, entitiesOut: nOut, levels: levels.length,
+              plans: recs.filter(function (r) { return r.kind !== 'detail'; }).length,
+              details: recs.filter(function (r) { return r.kind === 'detail'; }).length,
+              titles: cfg.TITLE ? recs.filter(function (r) { return r.kind !== 'detail'; }).length : 0 },
     extents: ext
   };
 }
 
 var API = {
   CFG: CFG, mergeLevels: mergeLevels, parseLevelName: parseLevelName,
+  layoutSections: layoutSections,
   levelTitle: levelTitle, bytesToStr: bytesToStr, strToBytes: strToBytes,
   _analyze: analyzeFile, _parsePairs: parsePairs, _splitSections: splitSections,
   _chunkByZero: chunkByZero
@@ -2287,8 +2690,6 @@ var API = {
 if (typeof module !== 'undefined' && module.exports) module.exports = API;
 global.DXFMERGE = API;
 })(typeof self !== 'undefined' ? self : this);
-
-
 
 
 /* ==================================================================== */
@@ -2372,10 +2773,12 @@ function takeFiles(list) {
     if (queue.some(q => q.name === f.name)) continue;
     const lv = DXFMERGE.parseLevelName(f.name);
     queue.push({ name: f.name, file: f, level: lv ? lv.level : null,
-                 prefix: lv ? lv.prefix : null, status: "αναμονή", out: null, audit: null });
+                 prefix: lv ? lv.prefix : null, kind: lv ? lv.kind : 'plan',
+                 status: "αναμονή", out: null, audit: null });
     added++;
   }
-  queue.sort((a, b) => (a.level === null ? 999 : a.level) - (b.level === null ? 999 : b.level));
+  queue.sort((a, b) => ((a.level === null ? 999 : a.level) - (b.level === null ? 999 : b.level))
+                       || (a.kind === 'plan' ? -1 : 1));
   if (skipped.length) log("Παραλείφθηκαν (όχι .dxf): " + skipped.join(", "));
   const noLevel = queue.filter(q => q.level === null);
   if (noLevel.length) log("⚠ Δεν αναγνωρίστηκε στάθμη (χρειάζεται όνομα …_orN.dxf): " +
@@ -2388,8 +2791,11 @@ function takeFiles(list) {
 
 function levelLabel(q) {
   if (q.level === null) return "—";
-  const levels = queue.filter(x => x.level !== null).map(x => x.level);
-  return "or" + q.level + " · y=" + LEVEL_Y(q.level) + " · " + DXFMERGE.levelTitle(q.level, levels);
+  const levels = queue.filter(x => x.level !== null && x.kind === 'plan').map(x => x.level);
+  if (q.kind === 'detail')
+    return "or" + q.level + " · ΛΕΠΤΟΜΕΡΕΙΕΣ ΥΠΟΣΤ. → (5, " + LEVEL_Y(q.level) + ")";
+  return "or" + q.level + " · y=" + LEVEL_Y(q.level) + " · " +
+         DXFMERGE.levelTitle(q.level, levels.length ? levels : [q.level]);
 }
 
 function renderList() {
@@ -2440,11 +2846,25 @@ async function runAll() {
     sawZero = false;
     try {
       const buf = await q.file.arrayBuffer();
-      const out = await runOne(buf);
-      q.out = out; q.audit = sawZero;
-      q.status = sawZero ? "ΟΚ · audit 0" : "ΠΡΟΣΟΧΗ · audit ≠ 0";
-      if (sawZero) okCount++;
-      phase(3, "done");
+      if (q.kind === 'detail') {
+        /* ΛΕΠΤΟΜΕΡΕΙΕΣ: καμία τακτοποίηση οπλισμού - μόνο διάταξη διατομών */
+        busy(true, "[" + (i+1) + "/" + queue.length + "] " + q.name + " — διάταξη διατομών…");
+        const res = DXFMERGE.layoutSections(DXFMERGE.bytesToStr(new Uint8Array(buf)));
+        q.out = DXFMERGE.strToBytes(res.text);
+        q.status = "ΟΚ · " + res.rows + " σειρές";
+        okCount++;
+        log("  Διατομές: " + res.groups.length + " σύνολα, " + res.rows + " σειρές, φύλλο " +
+            res.width.toFixed(1) + " × " + res.height.toFixed(1) + " (×" + DXFMERGE.CFG.SEC_SCALE + ")");
+        log("  Σειρά ανάγνωσης: " + res.order.filter(Boolean).join(", "));
+        res.warnings.forEach(w => log("  ⚠ " + w));
+        phase(1, "done"); phase(2, "done"); phase(3, "done");
+      } else {
+        const out = await runOne(buf);
+        q.out = out; q.audit = sawZero;
+        q.status = sawZero ? "ΟΚ · audit 0" : "ΠΡΟΣΟΧΗ · audit ≠ 0";
+        if (sawZero) okCount++;
+        phase(3, "done");
+      }
     } catch (e) {
       q.status = "ΣΦΑΛΜΑ"; q.out = null;
       log("✗ " + q.name + ": " + (e.message || e));
@@ -2454,11 +2874,12 @@ async function runAll() {
 
   const dt = ((Date.now() - T0) / 60000).toFixed(1);
   log("\n===== ΣΥΓΚΕΝΤΡΩΤΙΚΑ =====");
-  queue.forEach(q => log("  " + q.name.padEnd(34) + (q.status === "ΟΚ · audit 0" ? "✓" : "✗ " + q.status)));
+  queue.forEach(q => log("  " + q.name.padEnd(34) + (q.status.indexOf("ΟΚ") === 0 ? "✓ " + q.status : "✗ " + q.status)));
   log("Σύνολο: " + queue.length + " αρχεία σε " + dt + " λεπτά — " + okCount + " καθαρά (AUDIT_TOTAL 0).");
 
   $("audit").className = okCount === queue.length ? "ok" : "bad";
-  $("audit").textContent = okCount + "/" + queue.length + " με AUDIT_TOTAL 0";
+  const nPlan = queue.filter(q => q.kind !== 'detail').length;
+  $("audit").textContent = okCount + "/" + queue.length + " ΟΚ" + (nPlan < queue.length ? " (οι λεπτ. δεν ελέγχονται με audit)" : "");
 
   mergeAll();
   running = false; maybeEnable();
@@ -2474,14 +2895,14 @@ function mergeAll() {
   log("\n===== ΕΝΟΠΟΙΗΣΗ ΣΤΑΘΜΩΝ =====");
   let res;
   try {
-    res = DXFMERGE.mergeLevels(items.map(q => ({ name: q.name, text: DXFMERGE.bytesToStr(q.out) })));
+    res = DXFMERGE.mergeLevels(items.map(q => ({ name: q.name, kind: q.kind, text: DXFMERGE.bytesToStr(q.out) })));
   } catch (e) {
     log("✗ Η ένωση απέτυχε: " + (e.message || e));
     busy(false, '<span class="bad">Τα επιμέρους αρχεία είναι έτοιμα, αλλά η ένωση απέτυχε — δες το log.</span>');
     return;
   }
   res.report.forEach(r => log(
-    "  or" + String(r.level).padStart(2) + "  " + r.title.padEnd(34) +
+    "  or" + String(r.level).padStart(2) + " " + (r.kind === 'detail' ? "ΛΕΠΤ " : "ΞΥΛΟ ") + r.title.padEnd(34) +
     " pick(" + r.pick[0].toFixed(2) + ", " + r.pick[1].toFixed(2) + ")" +
     " → (" + r.target[0].toFixed(1) + ", " + r.target[1].toFixed(1) + ")" +
     "  μετατόπιση (" + r.delta[0].toFixed(2) + ", " + r.delta[1].toFixed(2) + ")"));
@@ -2496,9 +2917,10 @@ function mergeAll() {
   a.href = URL.createObjectURL(blob);
   a.download = prefix + "_ΕΝΟΠΟΙΗΜΕΝΟ.dxf";
   a.style.display = "inline-block";
-  const okAll = queue.every(q => q.status === "ΟΚ · audit 0");
+  const okAll = queue.every(q => q.status.indexOf("ΟΚ") === 0);
   busy(false, (okAll ? '<span class="ok">Όλα καθαρά (AUDIT_TOTAL 0). ' : '<span class="bad">Ολοκληρώθηκε με επιφυλάξεις — δες το log. ')
-    + 'Το ενοποιημένο DXF έχει ' + items.length + ' στάθμες, ανά 50 μονάδες στον άξονα y.</span>');
+    + 'Ενοποιημένο DXF: ' + res.counts.levels + ' στάθμες ανά ' + DXFMERGE.CFG.STEP_Y + ' μονάδες'
+    + (res.counts.details ? ' + ' + res.counts.details + ' φύλλο/α λεπτομερειών' : '') + '.</span>');
 }
 
 /* ΚΡΙΣΙΜΟ: αν το αρχείο πέσει ΕΚΤΟΣ ζώνης, ο browser ΕΓΚΑΤΑΛΕΙΠΕΙ τη σελίδα
