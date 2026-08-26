@@ -1736,14 +1736,24 @@ var CFG = {
   SEC_SCALE: 2.5,               // ΤΕΛΙΚΟ insert scale των διατομών (απόλυτο)
   SEC_NAME_GAP: 0.20,           // κενό ονόματος από το περιεχόμενο (πριν το scale)
   SEC_GX: 1.5, SEC_GY: 1.5,     // κενά μεταξύ διατομών (τελικές μονάδες)
+  /* --- περιμετρικές διαστάσεις ξυλοτύπου --- */
+  DIM_LAYER: 'DIM_PERIMETER',
+  DIM_COLOR: 2,                 // κίτρινο (ACI 2)
+  DIM_TEXT_H: 0.15,
+  DIM_OFF: 0.90,                // απόσταση αλυσίδας από το bounding box
+  DIM_OFF_TOTAL: 0.85,          // πόσο πιο έξω η συνολική διάσταση
+  DIM_TICK: 0.09,               // μισό μήκος ακίδας 45°
+  DIM_EXT_GAP: 0.10,            // κενό παρειάς → γραμμή προέκτασης
+  DIM_EXT_OVER: 0.13,           // προεξοχή πέρα από τη γραμμή διάστασης
+  DIM_TEXT_GAP: 0.05,
+  DIM_MIN_SEG: 0.02,            // κάτω από αυτό δεν γράφεται διάσταση
   SEC_LAYER_COLORS: {           // επιβολή χρώματος layer (ACI) στις λεπτομέρειες
     'ironlabels_conline': 5,    //   5 = μπλε
     'section_iron': 6           //   6 = magenta
   },
   SEC_MAX_ROWS: 4,              // ΠΟΤΕ πάνω από 4 σειρές
-  SEC_MAX_H: 26.0,              // ΑΠΑΡΑΒΑΤΟ: η ζώνη δεν ξεπερνά ποτέ αυτό
-  SEC_AREA_TOL: 1.25,           // πόσο «αραιότερο» από το πυκνότερο δυνατό δεχόμαστε
-                                //   για να κερδίσουμε μικρότερη ζώνη (+25%)
+  SEC_MAX_H: 26.0,              // ΑΠΑΡΑΒΑΤΟ: το ΥΨΟΣ της ζώνης. Μέσα σε αυτό,
+                                //   στόχος είναι το ΕΛΑΧΙΣΤΟ ΠΛΑΤΟΣ.
   MAX_NAME: 31                  // όριο μήκους ονόματος block σε R12
 };
 
@@ -1780,7 +1790,7 @@ function levelTitle(n, levels) {
   var top = Math.max.apply(null, levels);
   if (n === -2) return 'ΘΕΜΕΛΙΩΣΗ';
   if (n === -1) return has(-2) ? 'ΟΡΟΦΗ ΥΠΟΓΕΙΟΥ' : 'ΘΕΜΕΛΙΩΣΗ';
-  if (n === 0) return 'ΟΡΟΦΗ';
+  if (n === 0) return 'ΟΡΟΦΗ ΙΣΟΓΕΙΟΥ';
   if (n === top) return 'ΟΡΟΦΗ ΑΝΩΤΑΤΗΣ ΣΤΑΘΜΗΣ/ΑΠΟΛ.ΚΛΙΜ.';
   return 'ΟΡΟΦΗ ' + n + 'ΟΥ ΟΡΟΦΟΥ';
 }
@@ -1815,6 +1825,13 @@ function dxfText(s, codepage) {
     return out;
   }
   return dxfEsc(s);
+}
+
+/* προσάρτηση στη θέση της - το `a = a.concat(b)` μέσα σε βρόχο αντιγράφει
+   ολόκληρο τον πίνακα κάθε φορά (τετραγωνικό κόστος σε μεγάλα έργα) */
+function push_(dst, src) {
+  for (var i = 0; i < src.length; i++) dst.push(src[i]);
+  return dst;
 }
 
 /* ---------- ζεύγη DXF ---------- */
@@ -1893,7 +1910,7 @@ function parseBlocks(P) {
 }
 function blockPairs(b) {
   var out = b.head.slice();
-  for (var i = 0; i < b.body.length; i++) out = out.concat(b.body[i]);
+  for (var i = 0; i < b.body.length; i++) push_(out, b.body[i]);
   return out.concat(b.end);
 }
 function hashChunks(list) {
@@ -2117,8 +2134,23 @@ function _bin(B, x, y, t) { return x >= B.mnx - t && x <= B.mxx + t && y >= B.mn
 function _bgrow(A, B) {
   return { mnx: Math.min(A.mnx, B.mnx), mny: Math.min(A.mny, B.mny), mxx: Math.max(A.mxx, B.mxx), mxy: Math.max(A.mxy, B.mxy) };
 }
-function _decEsc(s) {
-  return String(s).replace(/\\U\+([0-9A-Fa-f]{4})/g, function (_m, h) { return String.fromCharCode(parseInt(h, 16)); });
+var CP1253_REV = (function () {
+  var m = {};
+  for (var i = 0; i < CP1253_MAP.length; i += 6)
+    m[parseInt(CP1253_MAP.substr(i + 4, 2), 16)] = parseInt(CP1253_MAP.substr(i, 4), 16);
+  return m;
+})();
+/* ονόματα διατομών: άλλα αρχεία τα γράφουν με escapes \\U+039A, άλλα ως raw
+   bytes cp1253 - διαβάζουμε και τα δύο, αλλιώς το «Κ1» φαίνεται ως «Ê1» */
+function _decEsc(s, codepage) {
+  var t = String(s).replace(/\\U\+([0-9A-Fa-f]{4})/g, function (_m, h) { return String.fromCharCode(parseInt(h, 16)); });
+  if (codepage !== 'ANSI_1253') return t;
+  var out = '';
+  for (var i = 0; i < t.length; i++) {
+    var c = t.charCodeAt(i);
+    out += (c > 127 && CP1253_REV[c]) ? String.fromCharCode(CP1253_REV[c]) : t[i];
+  }
+  return out;
 }
 
 function layoutSections(text, cfgOverride) {
@@ -2217,7 +2249,7 @@ function layoutSections(text, cfgOverride) {
       for (var j = 0; j < body.length; j++) {
         if (body[j][0].v.trim() !== 'MTEXT') continue;
         if ((val(body[j], 8) || '') !== 'section_prefix_name') continue;
-        return _decEsc(val(body[j], 1) || '');
+        return _decEsc(val(body[j], 1) || '', f.codepage);
       }
     }
     return '';
@@ -2272,18 +2304,18 @@ function layoutSections(text, cfgOverride) {
     }
   })(0, []);
 
+  /* Ζώνη ύψους SEC_MAX_H (απαράβατο). Μέσα σε αυτήν, από ΟΛΕΣ τις κατατμήσεις
+     κρατάμε αυτή με το ΕΛΑΧΙΣΤΟ ΠΛΑΤΟΣ - και σε ισοπαλία τη χαμηλότερη. */
   var fits = cands.filter(function (x) { return x.H <= cfg.SEC_MAX_H + 1e-9; });
   var best, warnFit = null;
   if (!fits.length) {
     best = cands.reduce(function (a2, b2) { return b2.H < a2.H ? b2 : a2; });
-    warnFit = 'Δεν χωράει σε ζώνη ' + cfg.SEC_MAX_H + ': το ελάχιστο εφικτό ύψος είναι ' + best.H.toFixed(1) +
-              ' (η ψηλότερη διατομή από μόνη της είναι ' +
+    warnFit = 'Δεν χωράει σε ζώνη ύψους ' + cfg.SEC_MAX_H + ': το ελάχιστο εφικτό ύψος είναι ' +
+              best.H.toFixed(1) + ' (η ψηλότερη διατομή από μόνη της είναι ' +
               Math.max.apply(null, items.map(function (x) { return x.h; })).toFixed(1) + ').';
   } else {
-    var minArea = fits.reduce(function (a3, b3) { return b3.area < a3.area ? b3 : a3; }).area;
-    var dense = fits.filter(function (x) { return x.area <= minArea * cfg.SEC_AREA_TOL + 1e-9; });
-    dense.sort(function (x, y) { return (x.H - y.H) || (x.W - y.W); });
-    best = dense[0];
+    fits.sort(function (x, y) { return (x.W - y.W) || (x.H - y.H); });
+    best = fits[0];
   }
 
   var place = {}, yy = best.H;
@@ -2307,20 +2339,34 @@ function layoutSections(text, cfgOverride) {
   var P = f.pairs, a0 = -1, b0 = -1;
   for (var w = 0; w < P.length; w++) if (P[w].c === 2 && P[w].v.trim() === 'ENTITIES') { a0 = w + 1; break; }
   for (var w2 = a0; w2 < P.length; w2++) if (P[w2].c === 0 && P[w2].v.trim() === 'ENDSEC') { b0 = w2; break; }
-  var flat = [], nMoved = 0;
+  var flat = [], nMoved = 0, nScaled = 0;
   chunkByZero(P.slice(a0, b0)).forEach(function (ch) {
-    if (ch[0].v.trim() !== 'INSERT') { flat = flat.concat(ch); return; }
+    if (ch[0].v.trim() !== 'INSERT') { push_(flat, ch); return; }
     var n = newIns[val(ch, 2)];
-    if (!n) { flat = flat.concat(ch); return; }
+    if (!n) { push_(flat, ch); return; }
     nMoved++;
-    flat = flat.concat(ch.map(function (p) {
+    var has41 = false, at = -1;
+    var out2 = ch.map(function (p, ix) {
       if (p.c === 10) return mk(10, num(n.x));
-      if (p.c === 20) return mk(20, num(n.y));
-      if (p.c === 41) return mk(41, num(n.sx));
-      if (p.c === 42) return mk(42, num(n.sy));
-      if (p.c === 43) return mk(43, num(n.sx));
+      if (p.c === 20) { if (at < ix) at = ix; return mk(20, num(n.y)); }
+      if (p.c === 30) { at = ix; return p; }
+      if (p.c === 41) { has41 = true; return mk(41, num(n.sx)); }
+      if (p.c === 42) { has41 = true; return mk(42, num(n.sy)); }
+      if (p.c === 43) { has41 = true; return mk(43, num(n.sx)); }
       return p;
-    }));
+    });
+    /* ΚΡΙΣΙΜΟ: αν το INSERT δεν έχει καθόλου κλίμακα (πολλά DXF την
+       παραλείπουν όταν είναι 1), ΠΡΕΠΕΙ να γραφτεί - αλλιώς οι θέσεις
+       μεγεθύνονται και η γεωμετρία μένει 1:1. Μπαίνει στην κανονική
+       της θέση, αμέσως μετά τα 10/20/30. */
+    if (!has41 && at >= 0) {
+      var ins2 = [];
+      if (!ch.some(function (p) { return p.c === 30; })) ins2.push(mk(30, '0.0'));
+      ins2.push(mk(41, num(n.sx)), mk(42, num(n.sy)), mk(43, num(n.sx)));
+      out2 = out2.slice(0, at + 1).concat(ins2, out2.slice(at + 1));
+      nScaled++;
+    }
+    push_(flat, out2);
   });
   var NP = P.slice(0, a0).concat(flat, P.slice(b0));
 
@@ -2343,11 +2389,260 @@ function layoutSections(text, cfgOverride) {
   return {
     text: ser(NP, f.eol), rows: best.R, width: best.W, height: best.H,
     baseScale: baseScale, finalScale: cfg.SEC_SCALE, factor: K,
-    order: keys.map(label), moved: nMoved, warnings: warn, recolored: recolored,
+    order: keys.map(label), moved: nMoved, scaleAdded: nScaled, warnings: warn, recolored: recolored,
     groups: keys.map(function (key) {
       return { key: key.replace(pre, ''), label: label(key), members: G[key].members.length,
                w: (G[key].box.mxx - G[key].box.mnx) * K, h: (G[key].box.mxy - G[key].box.mny) * K };
     })
+  };
+}
+
+/* =====================================================================
+   ΠΕΡΙΜΕΤΡΙΚΕΣ ΔΙΑΣΤΑΣΕΙΣ ΞΥΛΟΤΥΠΟΥ (preffix_orN)
+   Έξω από το bounding box, και στις 4 πλευρές:
+     • αλυσίδα: αρχή/τέλος κάθε ΠΕΡΙΜΕΤΡΙΚΗΣ κολώνας και τα κενά μεταξύ τους
+     • από πάνω (πιο έξω) μία συνολική διάσταση
+   Γράφεται ως ρητή γεωμετρία (γραμμές + ακίδες 45° + MTEXT ύψους 0.15),
+   ώστε να ανοίγει παντού· δεν είναι οντότητες DIMENSION του AutoCAD.
+   ===================================================================== */
+function _worldLineBox(f, blk) {
+  /* bbox ΜΟΝΟ από LINE - τα HATCH έχουν σημείο αναφοράς (0,0) που θα
+     δηλητηρίαζε το πλαίσιο */
+  var pos = f.inserts[blk.name] || [[0, 0, 1, 1]];
+  var B = { mnx: 1e18, mny: 1e18, mxx: -1e18, mxy: -1e18 };
+  var lines = block_lines_cache(blk);
+  for (var p = 0; p < pos.length; p++) {
+    var px = pos[p][0], py = pos[p][1], kx = pos[p][2] || 1, ky = pos[p][3] || 1;
+    for (var l = 0; l < lines.length; l++) {
+      var q = lines[l];
+      var xs = [px + kx * (q[0] - blk.bx), px + kx * (q[2] - blk.bx)];
+      var ys = [py + ky * (q[1] - blk.by), py + ky * (q[3] - blk.by)];
+      for (var i = 0; i < 2; i++) {
+        if (xs[i] < B.mnx) B.mnx = xs[i]; if (xs[i] > B.mxx) B.mxx = xs[i];
+        if (ys[i] < B.mny) B.mny = ys[i]; if (ys[i] > B.mxy) B.mxy = ys[i];
+      }
+    }
+  }
+  return B.mnx < 1e17 ? B : null;
+}
+var _blc = {};
+function block_lines_cache(blk) {
+  var k = blk.name;
+  if (_blc[k] && _blc[k].b === blk) return _blc[k].v;
+  var v = [];
+  for (var i = 0; i < blk.body.length; i++) {
+    var ch = blk.body[i];
+    if (ch[0].v.trim() !== 'LINE') continue;
+    var x1 = parseFloat(val(ch, 10)), y1 = parseFloat(val(ch, 20));
+    var x2 = parseFloat(val(ch, 11)), y2 = parseFloat(val(ch, 21));
+    if (isNaN(x1) || isNaN(y1) || isNaN(x2) || isNaN(y2)) continue;
+    v.push([x1, y1, x2, y2]);
+  }
+  _blc[k] = { b: blk, v: v };
+  return v;
+}
+
+function dimensionPlan(text, cfgOverride) {
+  var cfg = {}; for (var k0 in CFG) cfg[k0] = CFG[k0];
+  if (cfgOverride) for (var k1 in cfgOverride) cfg[k1] = cfgOverride[k1];
+  var f = analyzeFile(text);
+
+  /* --- κολώνες & συνολικό πλαίσιο --- */
+  var cols = [], B = { mnx: 1e18, mny: 1e18, mxx: -1e18, mxy: -1e18 };
+  for (var b = 0; b < f.blocks.length; b++) {
+    var blk = f.blocks[b], nm = blk.name;
+    if (nm.indexOf('TEXT') >= 0) continue;
+    var isCol = /^FL-?\d+_COLUMN\d+$/.test(nm);
+    var isStruct = CFG.STRUCT_RE.test(nm);
+    if (!isCol && !isStruct) continue;
+    var box = _worldLineBox(f, blk);
+    if (!box) continue;
+    if (isStruct) {
+      if (box.mnx < B.mnx) B.mnx = box.mnx; if (box.mxx > B.mxx) B.mxx = box.mxx;
+      if (box.mny < B.mny) B.mny = box.mny; if (box.mxy > B.mxy) B.mxy = box.mxy;
+    }
+    if (isCol) cols.push({ name: nm, box: box });
+  }
+  if (!cols.length || B.mnx > 1e17)
+    return { text: text, added: 0, warnings: ['Δεν βρέθηκαν κολώνες - δεν μπήκαν διαστάσεις.'] };
+
+  /* --- περιμετρικές κολώνες ανά πλευρά ---
+     «περιμετρική» = καμία άλλη κολώνα δεν βρίσκεται πιο έξω μέσα στο ίδιο
+     λωρίδι· δηλαδή είναι ορατή από εκείνη την πλευρά. */
+  var EPS = 1e-6;
+  function perim(side) {
+    return cols.filter(function (c) {
+      return !cols.some(function (o) {
+        if (o === c) return false;
+        if (side === 'B' || side === 'T') {
+          var ov = Math.min(c.box.mxx, o.box.mxx) - Math.max(c.box.mnx, o.box.mnx);
+          if (ov <= EPS) return false;
+          return side === 'B' ? o.box.mny < c.box.mny - EPS : o.box.mxy > c.box.mxy + EPS;
+        }
+        var ov2 = Math.min(c.box.mxy, o.box.mxy) - Math.max(c.box.mny, o.box.mny);
+        if (ov2 <= EPS) return false;
+        return side === 'L' ? o.box.mnx < c.box.mnx - EPS : o.box.mxx > c.box.mxx + EPS;
+      });
+    });
+  }
+  function chainOf(side) {
+    var P = perim(side), horiz = (side === 'B' || side === 'T'), pts = [];
+    P.forEach(function (c) {
+      pts.push(horiz ? c.box.mnx : c.box.mny);
+      pts.push(horiz ? c.box.mxx : c.box.mxy);
+    });
+    pts.sort(function (a, b2) { return a - b2; });
+    var out = [];
+    pts.forEach(function (v) { if (!out.length || v - out[out.length - 1] > cfg.DIM_MIN_SEG) out.push(v); });
+    return { pts: out, cols: P };
+  }
+
+  /* --- πρότυπο MTEXT & layer --- */
+  var tmpl = null;
+  for (var a1 = 0; a1 < f.ents.length && !tmpl; a1++) if (f.ents[a1][0].v.trim() === 'MTEXT') tmpl = f.ents[a1];
+  for (var a2 = 0; a2 < f.blocks.length && !tmpl; a2++)
+    for (var a3 = 0; a3 < f.blocks[a2].body.length && !tmpl; a3++)
+      if (f.blocks[a2].body[a3][0].v.trim() === 'MTEXT') tmpl = f.blocks[a2].body[a3];
+
+  var newH = (function () {
+    var mx = f.maxHandle || 0;
+    return function () { return (++mx).toString(16).toUpperCase(); };
+  })();
+
+  var ents = [];
+  function line(x1, y1, x2, y2) {
+    var c = [mk(0, 'LINE')];
+    if (f.hasHandles) c.push(mk(5, newH()));
+    if (tmpl) c.push(mk(100, 'AcDbEntity'));
+    c.push(mk(8, cfg.DIM_LAYER));
+    if (tmpl) c.push(mk(100, 'AcDbLine'));
+    c.push(mk(10, num(x1)), mk(20, num(y1)), mk(30, '0.0'));
+    c.push(mk(11, num(x2)), mk(21, num(y2)), mk(31, '0.0'));
+    ents.push(c);
+  }
+  function label(x, y, rot, s) {
+    if (!tmpl) return;
+    var vals = {}, used = {}, order = [5, 8, 10, 20, 30, 40, 41, 71, 50, 1];
+    var ensure = { 5: 1, 8: 1, 10: 1, 20: 1, 40: 1, 1: 1 };
+    if (f.hasHandles) vals[5] = newH(); else delete ensure[5];
+    vals[8] = cfg.DIM_LAYER; vals[10] = num(x); vals[20] = num(y); vals[30] = '0.0';
+    vals[40] = num(cfg.DIM_TEXT_H); vals[41] = num(cfg.DIM_TEXT_H * 12);
+    vals[71] = '5'; vals[50] = num(rot); vals[1] = s;
+    var DROP = { 105: 1, 330: 1, 360: 1, 3: 1, 11: 1, 21: 1, 31: 1, 62: 1 };
+    var out = [mk(0, 'MTEXT')];
+    for (var i = 1; i < tmpl.length; i++) {
+      var p = tmpl[i];
+      if (DROP[p.c]) continue;
+      if (vals.hasOwnProperty(p.c)) { if (used[p.c]) continue; used[p.c] = 1; out.push(mk(p.c, vals[p.c])); }
+      else out.push(p);
+    }
+    for (var j = 0; j < order.length; j++) {
+      var cd = order[j];
+      if (used[cd] || !ensure[cd]) continue;
+      var at = -1;
+      for (var k = j - 1; k >= 0 && at < 0; k--)
+        for (var m = out.length - 1; m >= 0; m--) if (out[m].c === order[k]) { at = m; break; }
+      if (at >= 0) out.splice(at + 1, 0, mk(cd, vals[cd])); else out.push(mk(cd, vals[cd]));
+      used[cd] = 1;
+    }
+    ents.push(out);
+  }
+
+  var T = cfg.DIM_TICK, H = cfg.DIM_TEXT_H;
+  function draw(side, pts, colsOfSide) {
+    if (pts.length < 2) return 0;
+    var horiz = (side === 'B' || side === 'T');
+    var sgn = (side === 'B' || side === 'L') ? -1 : 1;      // φορά προς τα έξω
+    var base = horiz ? (sgn < 0 ? B.mny : B.mxy) : (sgn < 0 ? B.mnx : B.mxx);
+    var d1 = base + sgn * cfg.DIM_OFF;                       // γραμμή αλυσίδας
+    var d2 = base + sgn * (cfg.DIM_OFF + cfg.DIM_OFF_TOTAL); // συνολική
+
+    function put(fn) { horiz ? fn() : fn(); }
+    function dline(a, b2, d) { horiz ? line(a, d, b2, d) : line(d, a, d, b2); }
+    function tick(v, d) {
+      var t = T;
+      horiz ? line(v - t, d - t, v + t, d + t) : line(d - t, v - t, d + t, v + t);
+    }
+    function ext(v, near, d) {   // γραμμή προέκτασης από την παρειά ως τη διάσταση
+      var s = near + sgn * cfg.DIM_EXT_GAP, e = d + sgn * cfg.DIM_EXT_OVER;
+      horiz ? line(v, s, v, e) : line(s, v, e, v);
+    }
+    function txt(a, b2, d, stagger) {
+      var len = Math.abs(b2 - a);
+      if (len < cfg.DIM_MIN_SEG) return;
+      var mid = (a + b2) / 2;
+      /* αν το κείμενο δεν χωράει καθαρά ανάμεσα στις ακίδες, βγαίνει πιο έξω
+         σε δεύτερη σειρά αντί να πατήσει τη διπλανή διάσταση */
+      var w = String(len.toFixed(2)).length * H * 0.62;
+      var room = len - 2 * T - cfg.DIM_TEXT_GAP;
+      var off = cfg.DIM_TEXT_GAP + H / 2 + (stagger && w > room ? H * 1.7 : 0);
+      var pos = d + sgn * off;
+      horiz ? label(mid, pos, 0, len.toFixed(2)) : label(pos, mid, 90, len.toFixed(2));
+    }
+
+    /* αλυσίδα */
+    dline(pts[0], pts[pts.length - 1], d1);
+    pts.forEach(function (v) { tick(v, d1); });
+    for (var i = 0; i + 1 < pts.length; i++) txt(pts[i], pts[i + 1], d1, true);
+    /* γραμμές προέκτασης: ΠΡΟΒΟΛΗ από το bounding box - ξεκινούν στο πλαίσιο,
+       όχι στην παρειά της κολώνας (αλλιώς διασχίζουν όλο τον ξυλότυπο) */
+    pts.forEach(function (v) { ext(v, base, d1); });
+    /* συνολική */
+    dline(pts[0], pts[pts.length - 1], d2);
+    tick(pts[0], d2); tick(pts[pts.length - 1], d2);
+    txt(pts[0], pts[pts.length - 1], d2, false);
+    ext(pts[0], base, d2); ext(pts[pts.length - 1], base, d2);
+    return pts.length - 1;
+  }
+
+  var report = {};
+  ['B', 'T', 'L', 'R'].forEach(function (s) {
+    var ch = chainOf(s);
+    report[s] = { cols: ch.cols.length, segs: draw(s, ch.pts, ch.cols) };
+  });
+
+  /* --- layer διαστάσεων (κλώνος υπαρκτού, για συμβατότητα R2000) --- */
+  var P = f.pairs.slice();
+  var layIdx = -1, layEnd = -1, tmplLayer = null, exists = false;
+  for (var i2 = 0; i2 < P.length - 1; i2++) {
+    if (!(P[i2].c === 0 && P[i2].v.trim() === 'LAYER')) continue;
+    var j2 = i2 + 1, nm2 = null;
+    while (j2 < P.length && P[j2].c !== 0) { if (P[j2].c === 2 && nm2 === null) nm2 = P[j2].v.trim(); j2++; }
+    if (nm2 === cfg.DIM_LAYER) exists = true;
+    if (!tmplLayer) { tmplLayer = P.slice(i2, j2); layEnd = j2; }
+  }
+  var addPairs = [];
+  if (!exists && tmplLayer) {
+    var usedL = {};
+    addPairs = tmplLayer.map(function (p) {
+      if (p.c === 2 && !usedL[2]) { usedL[2] = 1; return mk(2, cfg.DIM_LAYER); }
+      if (p.c === 62 && !usedL[62]) { usedL[62] = 1; return mk(62, cfg.DIM_COLOR); }
+      if (p.c === 5) return mk(5, newH());
+      if (p.c === 70) return mk(70, 0);
+      return p;
+    });
+  }
+
+  /* --- εισαγωγή στο αρχείο --- */
+  var a0 = -1, b0 = -1;
+  for (var w = 0; w < P.length; w++) if (P[w].c === 2 && P[w].v.trim() === 'ENTITIES') { a0 = w + 1; break; }
+  for (var w2 = a0; w2 < P.length; w2++) if (P[w2].c === 0 && P[w2].v.trim() === 'ENDSEC') { b0 = w2; break; }
+  var flat = [];
+  ents.forEach(function (c) { push_(flat, c); });
+  var NP = P.slice(0, a0).concat(P.slice(a0, b0), flat, P.slice(b0));
+  if (addPairs.length) {
+    var shift = (layEnd <= a0) ? 0 : flat.length;
+    NP = NP.slice(0, layEnd).concat(addPairs, NP.slice(layEnd));
+  }
+  /* $HANDSEED */
+  if (f.hasHandles) {
+    for (var hs = 0; hs + 1 < NP.length; hs++)
+      if (NP[hs].c === 9 && NP[hs].v.trim() === '$HANDSEED' && NP[hs + 1].c === 5)
+        NP[hs + 1] = mk(5, (f.maxHandle + ents.length * 4 + 32).toString(16).toUpperCase());
+  }
+  return {
+    text: ser(NP, f.eol), added: ents.length, sides: report,
+    bbox: B, columns: cols.length, warnings: []
   };
 }
 
@@ -2508,10 +2803,10 @@ function mergeLevels(items, cfgOverride) {
         for (var hi = 1; hi < head.length; hi++)
           if (head[hi].c === 2 || head[hi].c === 3) head[hi] = mk(head[hi].c, bb.newName);
       }
-      outBlocks = outBlocks.concat(head);
+      push_(outBlocks, head);
       for (var bo = 0; bo < bb.body.length; bo++)
-        outBlocks = outBlocks.concat(fixH(rc, hasRen ? applyRename(bb.body[bo], rc.rename) : bb.body[bo]));
-      outBlocks = outBlocks.concat(fixH(rc, bb.end));
+        push_(outBlocks, fixH(rc, hasRen ? applyRename(bb.body[bo], rc.rename) : bb.body[bo]));
+      push_(outBlocks, fixH(rc, bb.end));
     }
   }
 
@@ -2659,7 +2954,7 @@ function mergeLevels(items, cfgOverride) {
       if (ch2[0].v.trim() === 'ENDSEC' || ch2[0].v.trim() === 'EOF') continue;
       nIn++;
       var mv = translateChunk(fixH(R, hasRen2 ? applyRename(ch2, R.rename) : ch2), dx, dy);
-      outEnts = outEnts.concat(mv); nOut++;
+      push_(outEnts, mv); nOut++;
     }
     var hgt = (F.allBox ? F.allBox.maxy - F.allBox.miny : 0);
     if (hgt > cfg.STEP_Y)
@@ -2674,7 +2969,7 @@ function mergeLevels(items, cfgOverride) {
     var title = levelTitle(R.level, levels);
     if (cfg.TITLE && !isDet) {
       var tx = pick.minx + dx, tyy = ty + cfg.TITLE_DY;
-      outEnts = outEnts.concat(titleEntity(tx, tyy, title));
+      push_(outEnts, titleEntity(tx, tyy, title));
       if (tyy - cfg.TITLE_H < ext.miny) ext.miny = tyy - cfg.TITLE_H;
     }
     report.push({
@@ -2708,7 +3003,7 @@ function mergeLevels(items, cfgOverride) {
   var P = [];
   function section(name, body) {
     P.push(mk(0, 'SECTION')); P.push(mk(2, name));
-    P = P.concat(body);
+    push_(P, body);
     P.push(mk(0, 'ENDSEC'));
   }
   if (hasH) {
@@ -2722,8 +3017,8 @@ function mergeLevels(items, cfgOverride) {
   for (var w = 0; w < outTabs.length; w++) {
     var TB = outTabs[w], hd = TB.head.slice();
     for (var w2 = 1; w2 < hd.length; w2++) if (hd[w2].c === 70) hd[w2] = mk(70, TB.entries.length);
-    tbody = tbody.concat(hd);
-    for (var w3 = 0; w3 < TB.entries.length; w3++) tbody = tbody.concat(TB.entries[w3].chunk);
+    push_(tbody, hd);
+    for (var w3 = 0; w3 < TB.entries.length; w3++) push_(tbody, TB.entries[w3].chunk);
     tbody.push(mk(0, 'ENDTAB'));
   }
   section('TABLES', tbody);
@@ -2745,7 +3040,7 @@ function mergeLevels(items, cfgOverride) {
 
 var API = {
   CFG: CFG, mergeLevels: mergeLevels, parseLevelName: parseLevelName,
-  layoutSections: layoutSections,
+  layoutSections: layoutSections, dimensionPlan: dimensionPlan,
   levelTitle: levelTitle, bytesToStr: bytesToStr, strToBytes: strToBytes,
   _analyze: analyzeFile, _parsePairs: parsePairs, _splitSections: splitSections,
   _chunkByZero: chunkByZero
@@ -2923,7 +3218,20 @@ async function runAll() {
         phase(1, "done"); phase(2, "done"); phase(3, "done");
       } else {
         const out = await runOne(buf);
-        q.out = out; q.audit = sawZero;
+        q.audit = sawZero;
+        /* περιμετρικές διαστάσεις: ΜΕΤΑ την τακτοποίηση και τον έλεγχο,
+           ώστε το AUDIT_TOTAL να αφορά μόνο τα κείμενα οπλισμού */
+        let dxf = out;
+        try {
+          const dm = DXFMERGE.dimensionPlan(DXFMERGE.bytesToStr(out));
+          if (dm.added) {
+            dxf = DXFMERGE.strToBytes(dm.text);
+            const sd = Object.keys(dm.sides).map(k => k + ":" + dm.sides[k].segs).join(" ");
+            log("  Διαστάσεις: " + dm.added + " οντότητες σε 4 πλευρές (τμήματα " + sd + ")");
+          }
+          dm.warnings.forEach(w => log("  ⚠ " + w));
+        } catch (e) { log("  ⚠ Οι διαστάσεις δεν μπήκαν: " + (e.message || e)); }
+        q.out = dxf;
         q.status = sawZero ? "ΟΚ · audit 0" : "ΠΡΟΣΟΧΗ · audit ≠ 0";
         if (sawZero) okCount++;
         phase(3, "done");
