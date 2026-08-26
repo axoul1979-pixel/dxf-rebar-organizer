@@ -1741,6 +1741,10 @@ var CFG = {
   DIM_COLOR: 2,                 // κίτρινο (ACI 2)
   DIM_TEXT_H: 0.15,
   DIM_SAFE: 0.25,               // απόσταση ασφαλείας από ΚΑΘΕ στοιχείο του σχεδίου
+  /* --- αντίγραφο σκελετού δίπλα στην κάτοψη --- */
+  DUP_RE: /^FL-?\d+_(COLUMN|BEAM)\d+$/,   // ΜΟΝΟ κολώνες & δοκοί (όχι κείμενα)
+  DUP_DX: -100.0,               // 100μ αριστερά
+  DUP_DY: 0.0,
   DIM_TICK: 0.09,               // μισό μήκος ακίδας 45°
   DIM_EXT_GAP: 0.10,            // κενό παρειάς → γραμμή προέκτασης
   DIM_EXT_OVER: 0.13,           // προεξοχή πέρα από τη γραμμή διάστασης
@@ -2769,6 +2773,53 @@ function dimensionPlan(text, cfgOverride) {
   };
 }
 
+
+/* =====================================================================
+   ΑΝΤΙΓΡΑΦΟ ΣΚΕΛΕΤΟΥ: δίπλα σε κάθε κάτοψη, αντίγραφο ΜΟΝΟ των blocks
+   COLUMN και BEAM, μετατοπισμένο κατά DUP_DX (100μ αριστερά).
+   Δεν δημιουργούνται νέα blocks - μπαίνουν μόνο νέα INSERT στα ίδια
+   blocks, οπότε η γεωμετρία είναι εξ ορισμού πανομοιότυπη.
+   ===================================================================== */
+function copyStructure(text, cfgOverride) {
+  var cfg = {}; for (var k0 in CFG) cfg[k0] = CFG[k0];
+  if (cfgOverride) for (var k1 in cfgOverride) cfg[k1] = cfgOverride[k1];
+  var f = analyzeFile(text);
+  var mx = f.maxHandle || 0;
+  function newH() { return (++mx).toString(16).toUpperCase(); }
+
+  var copies = [], names = {};
+  for (var i = 0; i < f.ents.length; i++) {
+    var ch = f.ents[i];
+    if (ch[0].v.trim() !== 'INSERT') continue;
+    var nm = val(ch, 2);
+    if (!nm || !cfg.DUP_RE.test(nm)) continue;
+    names[nm] = 1;
+    var seen10 = false, seen20 = false;
+    var out = ch.map(function (p) {
+      if (p.c === 5) return mk(5, newH());
+      if (p.c === 10 && !seen10) { seen10 = true; var x = parseFloat(p.v); return isNaN(x) ? p : mk(10, num(x + cfg.DUP_DX)); }
+      if (p.c === 20 && !seen20) { seen20 = true; var y = parseFloat(p.v); return isNaN(y) ? p : mk(20, num(y + cfg.DUP_DY)); }
+      return p;
+    });
+    copies.push(out);
+  }
+  if (!copies.length) return { text: text, copied: 0, blocks: 0, warnings: ['Δεν βρέθηκαν blocks COLUMN/BEAM - δεν έγινε αντίγραφο.'] };
+
+  var P = f.pairs, a0 = -1, b0 = -1;
+  for (var w = 0; w < P.length; w++) if (P[w].c === 2 && P[w].v.trim() === 'ENTITIES') { a0 = w + 1; break; }
+  for (var w2 = a0; w2 < P.length; w2++) if (P[w2].c === 0 && P[w2].v.trim() === 'ENDSEC') { b0 = w2; break; }
+  var flat = [];
+  copies.forEach(function (c) { push_(flat, c); });
+  var NP = P.slice(0, b0).concat(flat, P.slice(b0));
+  if (f.hasHandles) {
+    for (var hs = 0; hs + 1 < NP.length; hs++)
+      if (NP[hs].c === 9 && NP[hs].v.trim() === '$HANDSEED' && NP[hs + 1].c === 5)
+        NP[hs + 1] = mk(5, (mx + 16).toString(16).toUpperCase());
+  }
+  return { text: ser(NP, f.eol), copied: copies.length, blocks: Object.keys(names).length,
+           dx: cfg.DUP_DX, warnings: [] };
+}
+
 /* ---------- κύρια συνάρτηση ---------- */
 /* items: [{name, text}]  ->  {text, report:[], warnings:[]} */
 function mergeLevels(items, cfgOverride) {
@@ -3163,7 +3214,7 @@ function mergeLevels(items, cfgOverride) {
 
 var API = {
   CFG: CFG, mergeLevels: mergeLevels, parseLevelName: parseLevelName,
-  layoutSections: layoutSections, dimensionPlan: dimensionPlan,
+  layoutSections: layoutSections, dimensionPlan: dimensionPlan, copyStructure: copyStructure,
   levelTitle: levelTitle, bytesToStr: bytesToStr, strToBytes: strToBytes,
   _analyze: analyzeFile, _parsePairs: parsePairs, _splitSections: splitSections,
   _chunkByZero: chunkByZero
@@ -3354,6 +3405,16 @@ async function runAll() {
           }
           dm.warnings.forEach(w => log("  ⚠ " + w));
         } catch (e) { log("  ⚠ Οι διαστάσεις δεν μπήκαν: " + (e.message || e)); }
+        /* αντίγραφο σκελετού (μόνο COLUMN & BEAM) 100μ αριστερά - ΜΕΤΑ τις
+           διαστάσεις, ώστε να μην μετρήσει στην απόσταση ασφαλείας */
+        try {
+          const cp = DXFMERGE.copyStructure(DXFMERGE.bytesToStr(dxf));
+          if (cp.copied) {
+            dxf = DXFMERGE.strToBytes(cp.text);
+            log("  Αντίγραφο σκελετού: " + cp.copied + " INSERT (COLUMN & BEAM) στα " + cp.dx + "μ");
+          }
+          cp.warnings.forEach(w => log("  ⚠ " + w));
+        } catch (e) { log("  ⚠ Το αντίγραφο σκελετού δεν μπήκε: " + (e.message || e)); }
         q.out = dxf;
         q.status = sawZero ? "ΟΚ · audit 0" : "ΠΡΟΣΟΧΗ · audit ≠ 0";
         if (sawZero) okCount++;
