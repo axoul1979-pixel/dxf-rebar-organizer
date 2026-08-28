@@ -1,0 +1,12 @@
+{
+  "name": "dxf-rebar-auto-tidy",
+  "version": "1.0.0",
+  "description": "Τακτοποίηση οπλισμού, διαστάσεις και ενοποίηση σταθμών για DXF ξυλοτύπων FESPA",
+  "private": true,
+  "scripts": {
+    "build": "python3 build/build_index.py",
+    "test": "bash tests/run_all.sh",
+    "serve": "python3 -m http.server 8000"
+  },
+  "license": "UNLICENSED"
+}

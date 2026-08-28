@@ -49,16 +49,50 @@ def point_in_poly(px, py, poly):
         x1,y1 = x2,y2
     return inside
 
+def _seg_intersect(p1, p2, p3, p4):
+    """True αν το τμήμα p1-p2 τέμνει το τμήμα p3-p4 (γνήσια ή σε επαφή)."""
+    def cross(o, a, b):
+        return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0])
+    d1 = cross(p3, p4, p1); d2 = cross(p3, p4, p2)
+    d3 = cross(p1, p2, p3); d4 = cross(p1, p2, p4)
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+       ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return True
+    def on_seg(p, q, r):
+        return min(p[0],r[0])-1e-9 <= q[0] <= max(p[0],r[0])+1e-9 and \
+               min(p[1],r[1])-1e-9 <= q[1] <= max(p[1],r[1])+1e-9
+    if abs(d1) < 1e-9 and on_seg(p3, p1, p4): return True
+    if abs(d2) < 1e-9 and on_seg(p3, p2, p4): return True
+    if abs(d3) < 1e-9 and on_seg(p1, p3, p2): return True
+    if abs(d4) < 1e-9 and on_seg(p1, p4, p2): return True
+    return False
+
 def bbox_poly_overlap(bb, poly):
-    """Correct bbox-vs-polygon overlap test using axis-aligned bbox of the polygon plus
-    a proper rectangle-rectangle overlap check, followed by point-containment as a
-    fallback for genuinely rotated/irregular polygons. The previous corner/vertex-only
-    test MISSED cases where two rectangles cross in a '+' shape with no corner of either
-    inside the other - a real, serious bug that caused many false "no overlap" results."""
+    """Πραγματική τομή κουτιού-πολυγώνου (Κανονισμός §7: το hatch είναι εμπόδιο
+    για όλα τα κείμενα, με το ΠΡΑΓΜΑΤΙΚΟ του σχήμα, όχι το bbox του). Η παλιά
+    υλοποίηση συνέκρινε bbox-πολυγώνου εναντίον bbox-κειμένου: ένα Γ-σχήμα hatch
+    (π.χ. δοκός με απότμηση/γωνία) έχει πολύ μικρότερο πραγματικό εμβαδόν από το
+    ορθογώνιο περίγραμμά του, οπότε "εμπόδιζε" και τεράστια άδεια περιοχή γύρω
+    του - 92 ψευδή ευρήματα στο DAMAR07. Τώρα: γρήγορη απόρριψη με bbox, μετά
+    κορυφή-πολυγώνου-μέσα-σε-κουτί, γωνία-κουτιού-μέσα-σε-πολύγωνο, και τομή
+    ακμών για στενές λωρίδες που διαπερνούν χωρίς καμία γωνία μέσα στην άλλη."""
     x1,y1,x2,y2 = bb
     pxs = [p[0] for p in poly]; pys = [p[1] for p in poly]
     px1,py1,px2,py2 = min(pxs),min(pys),max(pxs),max(pys)
-    # standard AABB overlap test - catches crossing rectangles correctly
-    if not (x2 < px1 or px2 < x1 or y2 < py1 or py2 < y1):
-        return True
+    if x2 < px1 or px2 < x1 or y2 < py1 or py2 < y1:
+        return False
+    for px, py in poly:
+        if x1 <= px <= x2 and y1 <= py <= y2:
+            return True
+    corners = [(x1,y1),(x2,y1),(x2,y2),(x1,y2)]
+    for c in corners:
+        if point_in_poly(c[0], c[1], poly):
+            return True
+    box_edges = [(corners[i], corners[(i+1)%4]) for i in range(4)]
+    n = len(poly)
+    for i in range(n):
+        p3, p4 = poly[i], poly[(i+1)%n]
+        for p1, p2 in box_edges:
+            if _seg_intersect(p1, p2, p3, p4):
+                return True
     return False

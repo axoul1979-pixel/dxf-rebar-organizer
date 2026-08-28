@@ -37,6 +37,21 @@ def strip_mtext_formatting(raw):
     s = s.replace('\\P', ' ').replace('{','').replace('}','')
     return s
 
+def mtext_rotation_deg(d):
+    """Στροφή MTEXT σε μοίρες. Ο κωδικός 50 είναι η κανονική πηγή, αλλά τα FESPA
+    DXF συχνά τον παραλείπουν εντελώς και δηλώνουν τη στροφή ΜΟΝΟ μέσω του
+    διανύσματος κατεύθυνσης 11/21 (X-axis direction vector). Χωρίς αυτό το fallback,
+    κάθε τέτοιο κείμενο μοντελοποιείται ως 0° (ξαπλωμένο) ακόμη κι όταν είναι όρθιο -
+    λάθος που έκανε αόρατες τις συγκρούσεις σε *όλα* τα κατακόρυφα κείμενα του
+    σχεδίου, όχι μόνο σε ένα (βρέθηκε 22/8/2026 σε πραγματικό έλεγχο, DAMAR07)."""
+    if 50 in d:
+        return float(d[50][0])
+    if 11 in d and 21 in d:
+        dx = float(d[11][0]); dy = float(d[21][0])
+        if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+            return math.degrees(math.atan2(dy, dx))
+    return 0.0
+
 def text_width(content, height):
     s = strip_mtext_formatting(content)
     w = sum(char_width_factor(ch) for ch in s) * height
@@ -59,7 +74,7 @@ class Block:
             elif typ == 'MTEXT':
                 x=float(d[10][0]); y=float(d[20][0])
                 h=float(d.get(40,['0.1'])[0])
-                rot=float(d.get(50,['0'])[0])
+                rot=mtext_rotation_deg(d)
                 content = d.get(1,[''])[0]
                 self.text = dict(x=x,y=y,h=h,rot=rot,content=content, ent_idx=idx)
 

@@ -1,7 +1,7 @@
 import re, math
 from analyze import get_all_blocks, entities_from_pairs, to_dict
 from parse_dxf import load_lines, parse_pairs, get_entities_section, split_entities, entity_to_dict
-from beambar_engine import get_inserts, strip_mtext_formatting, text_width, longest_segment, text_bbox, bbox_overlap, seg_intersects_bbox
+from beambar_engine import mtext_rotation_deg, get_inserts, strip_mtext_formatting, text_width, longest_segment, text_bbox, bbox_overlap, seg_intersects_bbox
 
 # ---------- World geometry loading ----------
 
@@ -30,7 +30,7 @@ def _block_lines_local_raw(pairlist):
             lines.append((float(d[10][0]),float(d[20][0]),float(d[11][0]),float(d[21][0])))
         elif typ=='MTEXT':
             mtexts.append(dict(x=float(d[10][0]), y=float(d[20][0]),
-                                h=float(d.get(40,['0.1'])[0]), rot=float(d.get(50,['0'])[0]),
+                                h=float(d.get(40,['0.1'])[0]), rot=mtext_rotation_deg(d),
                                 content=d.get(1,[''])[0]))
     return lines, mtexts
 

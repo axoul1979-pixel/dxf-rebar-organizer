@@ -43,6 +43,15 @@ MAX_SLIDE = 2.0
 
 # --- ΠΕΡΙΜΕΤΡΙΚΕΣ ΚΟΛΩΝΕΣ: κείμενο οπλισμού προς τα ΕΞΩ ---------------------
 PERIM_OUTWARD = True    # κύριος διακόπτης της λειτουργίας
+PERIM_OUT_GAP = 1.00   # §6: μέγιστη απόσταση ΚΟΥΤΙΟΥ-ΑΠΟ-ΚΟΛΩΝΑ για να θεωρηθεί
+                       # «εύλογη» μια έξω-περιμετρικά θέση
+PERIM_NEAR_OK = 0.60   # §6: αν υπάρχει καθαρή θέση τόσο κοντά στη δική του
+                       # κολώνα, προτιμάται ΑΚΟΜΗ ΚΑΙ σε περιμετρική - «προέχει
+                       # να είναι όσο το δυνατόν πιο κοντά»
+PERIM_REASONABLE_DIST = 2.5  # §6: "έξω περιμετρικά σε εύλογη απόσταση" - όριο
+                              # σε ΑΠΟΛΥΤΗ απόσταση από την κολώνα, ώστε η
+                              # εξωτερική θέση να μην απορρίπτεται απλώς επειδή
+                              # μια εσωτερική τυχαίνει να είναι λίγο κοντύτερα
 PERIM_DIR_WEIGHT = 2.0  # πόσο βαραίνει η κατεύθυνση. Το κόστος μιας θέσης είναι
                          # r * (1 + W*(1-align)/2), όπου align=+1 τελείως προς τα έξω
                          # και -1 προς τα μέσα. Με W=2.0 μια θέση 3μ προς τα έξω
@@ -202,9 +211,13 @@ def is_ok_chargap(boxes_local, contents, dx, dy, obstacle_lines, hatch_polys, pl
     for bi, (x, y, w, h, rot) in enumerate(boxes_local):
         bx = text_bbox(x+dx, y+dy, w, h, rot)
         for poly, pname in hatch_polys:
-            if pname in exclude_line_names:
-                continue
-            if bbox_poly_overlap(bx, poly):
+            # ΚΑΝΟΝΙΣΜΟΣ §6/§7: το hatch είναι εμπόδιο για ΟΛΑ τα κείμενα -
+            # ΚΑΙ το hatch της ΙΔΙΑΣ της κολώνας. Το κείμενο δεν επιτρέπεται να
+            # κάθεται πάνω στη διαγράμμιση του δικού του υποστυλώματος (γίνεται
+            # δυσανάγνωστο). Εξαιρείται μόνο το περιθώριο ασφαλείας, όχι ο
+            # έλεγχος: μια ετικέτα φυσιολογικά ακουμπά την άκρη του δικού της.
+            _hp = 0.0 if pname in exclude_line_names else 0.0
+            if bbox_poly_overlap((bx[0]-_hp, bx[1]-_hp, bx[2]+_hp, bx[3]+_hp), poly):
                 return False
         for pb in placed_boxes:
             if not (bx[2] + MIN_TEXT_GAP < pb[0] or pb[2] + MIN_TEXT_GAP < bx[0] or
@@ -267,9 +280,13 @@ def is_ok_tight(boxes_local, dx, dy, obstacle_lines, hatch_polys, placed_boxes, 
     for x, y, w, h, rot in boxes_local:
         bx = text_bbox(x+dx, y+dy, w, h, rot)
         for poly, pname in hatch_polys:
-            if pname in exclude_line_names:
-                continue
-            if bbox_poly_overlap(bx, poly):
+            # ΚΑΝΟΝΙΣΜΟΣ §6/§7: το hatch είναι εμπόδιο για ΟΛΑ τα κείμενα -
+            # ΚΑΙ το hatch της ΙΔΙΑΣ της κολώνας. Το κείμενο δεν επιτρέπεται να
+            # κάθεται πάνω στη διαγράμμιση του δικού του υποστυλώματος (γίνεται
+            # δυσανάγνωστο). Εξαιρείται μόνο το περιθώριο ασφαλείας, όχι ο
+            # έλεγχος: μια ετικέτα φυσιολογικά ακουμπά την άκρη του δικού της.
+            _hp = 0.0 if pname in exclude_line_names else 0.0
+            if bbox_poly_overlap((bx[0]-_hp, bx[1]-_hp, bx[2]+_hp, bx[3]+_hp), poly):
                 return False
         for pb in placed_boxes:
             if not (bx[2] + MIN_TEXT_GAP < pb[0] or pb[2] + MIN_TEXT_GAP < bx[0] or
@@ -681,17 +698,38 @@ def radial_place_full(name, blocks, obstacle_lines, hatch_polys, placed_boxes, e
     # instead of a strict search artificially capped at a smaller radius than a relaxed
     # spot that's actually closer. The search is centered on `seed` (usually near the
     # actual structural element the label belongs to), not necessarily (0,0).
+    # περιεχόμενα κειμένου - χρειάζονται για το κριτήριο «κενού μεταξύ χαρακτήρων»
+    _contents = []
+    try:
+        from analyze import entities_from_pairs as _efp, to_dict as _td
+        for _e in _efp(blocks[name]):
+            if _e[0][1] == 'MTEXT':
+                _contents.append(strip_mtext_formatting(_td(_e).get(1, [''])[0]))
+    except Exception:
+        _contents = []
+
     r = 0.0
     while r <= max_r:
         n_dirs = n_dirs_for(r) if r <= 1.2 else max(8, int(r/step))
         relaxed_candidate = None
+        chargap_candidate = None
         for k in range(n_dirs):
             ang = 2*math.pi*k/n_dirs if r>0 else 0
             ddx, ddy = sdx + r*math.cos(ang), sdy + r*math.sin(ang)
             if is_ok_full(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names):
                 return ddx, ddy
+            # 2ο επίπεδο στην ΙΔΙΑ ακτίνα: θέση όπου γραμμή περνά μεν από το
+            # κείμενο, αλλά ΜΟΝΟ στο κενό ΑΝΑΜΕΣΑ σε ψηφία/γράμματα - όχι πάνω
+            # τους. Οπτικά διαβάζεται κανονικά, και είναι σαφώς προτιμότερο από
+            # το να φύγει το κείμενο μέτρα μακριά από την κολώνα του (§6).
+            if chargap_candidate is None and _contents and \
+               is_ok_chargap(boxes_local, _contents, ddx, ddy, obstacle_lines,
+                              hatch_polys, placed_boxes, exclude_names):
+                chargap_candidate = (ddx, ddy)
             if allow_relaxed and relaxed_candidate is None and is_ok_relaxed(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names, max_crossings=1):
                 relaxed_candidate = (ddx, ddy)
+        if chargap_candidate is not None:
+            return chargap_candidate
         if relaxed_candidate:
             return relaxed_candidate
         r += step
@@ -720,6 +758,15 @@ def radial_place_outward(name, blocks, obstacle_lines, hatch_polys, placed_boxes
     καλών ξαναδοκιμάζει με False (χαλαρό δεύτερο πέρασμα).
     """
     boxes_local = block_text_bboxes(blocks[name])
+    _cg_candidate = [None]
+    _cg_contents = []
+    try:
+        from analyze import entities_from_pairs as _efp2, to_dict as _td2
+        for _e2 in _efp2(blocks[name]):
+            if _e2[0][1] == 'MTEXT':
+                _cg_contents.append(strip_mtext_formatting(_td2(_e2).get(1, [''])[0]))
+    except Exception:
+        _cg_contents = []
     if not boxes_local:
         return None
     ox_, oy_ = outward
@@ -748,8 +795,17 @@ def radial_place_outward(name, blocks, obstacle_lines, hatch_polys, placed_boxes
                     continue
             if is_ok_full(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names):
                 return ddx, ddy
+            # ίδιο κριτήριο «κενού μεταξύ χαρακτήρων» και ΕΞΩ, ώστε μια
+            # περιμετρική κολώνα να μη χάνει την εξωτερική της θέση μόνο και
+            # μόνο επειδή μια γραμμή περνά ανάμεσα στα ψηφία της
+            if _cg_candidate[0] is None and _cg_contents and \
+               is_ok_chargap(boxes_local, _cg_contents, ddx, ddy, obstacle_lines,
+                              hatch_polys, placed_boxes, exclude_names):
+                _cg_candidate[0] = (ddx, ddy)
             if allow_relaxed and relaxed_candidate is None and is_ok_relaxed(boxes_local, ddx, ddy, obstacle_lines, hatch_polys, placed_boxes, exclude_names, max_crossings=1):
                 relaxed_candidate = (ddx, ddy)
+        if _cg_candidate[0] is not None:
+            return _cg_candidate[0]
         if relaxed_candidate:
             return relaxed_candidate
         c += step
@@ -818,6 +874,34 @@ def place_column_text(name, own_col, blocks, obstacle_lines, hatch_polys, placed
     def _dist(res_):
         return math.hypot(res_[0]-seed[0], res_[1]-seed[1])
 
+    def _gap_to_own(res_):
+        """ΚΑΝΟΝΙΣΜΟΣ §6: η απόσταση μετριέται από το ΠΛΗΣΙΕΣΤΕΡΟ ΣΗΜΕΙΟ του
+        κουτιού προς την κολώνα - όχι από την αρχική θέση του κειμένου. Δύο
+        θέσεις μπορεί να απέχουν το ίδιο από το seed και εντελώς διαφορετικά
+        από την κολώνα (Κ7: 0,23 σωστά έξω - Κ10: 2,13 άσκοπα μακριά)."""
+        try:
+            _ox, _oy = ins.get(own_col, (0, 0)) if 'ins' in dir() else (0, 0)
+        except Exception:
+            _ox, _oy = 0, 0
+        try:
+            _cl, _ = block_lines_local(blocks[own_col])
+            if not _cl:
+                return _dist(res_)
+            _cx = [p for s_ in _cl for p in (s_[0], s_[2])]
+            _cy = [p for s_ in _cl for p in (s_[1], s_[3])]
+            _cb = (min(_cx)+_ox, min(_cy)+_oy, max(_cx)+_ox, max(_cy)+_oy)
+            _tb = None
+            for _x, _y, _w, _h, _r in block_text_bboxes(blocks[name]):
+                _b = text_bbox(_x+res_[0], _y+res_[1], _w, _h, _r)
+                _tb = _b if _tb is None else (min(_tb[0], _b[0]), min(_tb[1], _b[1]),
+                                               max(_tb[2], _b[2]), max(_tb[3], _b[3]))
+            if _tb is None:
+                return _dist(res_)
+            return math.hypot(max(0.0, _cb[0]-_tb[2], _tb[0]-_cb[2]),
+                               max(0.0, _cb[1]-_tb[3], _tb[1]-_cb[3]))
+        except Exception:
+            return _dist(res_)
+
     for allow_relaxed in (False, True):
         cands = []
         if PERIM_OUTWARD and outward is not None:
@@ -849,6 +933,46 @@ def place_column_text(name, own_col, blocks, obstacle_lines, hatch_polys, placed
         if cands:
             outside_c = next((c for c in cands if c[2]=='outside'), None)
             best_c = min(cands, key=lambda c: c[0])
+            # ΚΑΝΟΝΙΣΜΟΣ §6: για ΠΕΡΙΜΕΤΡΙΚΗ κολώνα η έξω-περιμετρικά θέση είναι
+            # η κανονική λύση «σε εύλογη απόσταση» - δεν απορρίπτεται επειδή
+            # κάποια εσωτερική τυχαίνει να είναι λίγο κοντύτερα. Η σύγκριση
+            # αποστάσεων κρατούσε τα κείμενα των τοιχείων (is_wall) μέσα στο
+            # κτίριο ακόμη κι όταν η κολώνα ήταν καθαρά περιμετρική.
+            # «εύλογη απόσταση» κλιμακώνεται με το ΜΕΓΕΘΟΣ της κολώνας: για ένα
+            # τοιχείο 2,50μ το κείμενο πρέπει να βγει έξω από ΟΛΟ το μήκος του,
+            # οπότε σταθερό όριο 2,5μ το απέρριπτε πάντα και το κείμενο έμενε μέσα.
+            _own_dim = 0.0
+            try:
+                _wl, _ = block_lines_local(blocks[own_col])
+                if _wl:
+                    _wx = [p for s_ in _wl for p in (s_[0], s_[2])]
+                    _wy = [p for s_ in _wl for p in (s_[1], s_[3])]
+                    _own_dim = max(max(_wx)-min(_wx), max(_wy)-min(_wy))
+            except Exception:
+                _own_dim = 0.0
+            _reasonable = PERIM_REASONABLE_DIST + _own_dim
+            # ΚΑΝΟΝΙΣΜΟΣ §6: «Προέχει να είναι ΟΣΟ ΤΟ ΔΥΝΑΤΟΝ ΠΙΟ ΚΟΝΤΑ. Αν
+            # υπάρχει καθαρή θέση ΜΕΣΑ, προτιμάται.» Η έξω-περιμετρικά θέση είναι
+            # η λύση όταν δεν βρίσκεται καθαρή θέση κοντά - ΟΧΙ όταν υπάρχει.
+            # Χωρίς αυτό, κείμενο που ήταν ήδη στα 0,01 από την κολώνα του
+            # εκτοξευόταν 2,97μ έξω (τεκμηριωμένο: Κ10 στο AISXYL00).
+            _near_c = min((c for c in cands if c[2] != 'outside'), key=lambda c: c[0], default=None)
+            if _near_c is not None and _near_c[0] <= PERIM_NEAR_OK:
+                return _near_c[1], _near_c[2]
+            # §6: κρίνεται η απόσταση της εξωτερικής θέσης ΑΠΟ ΤΗΝ ΚΟΛΩΝΑ, όχι
+            # από την αρχική θέση του κειμένου.
+            if outside_c is not None and _gap_to_own(outside_c[1]) <= PERIM_OUT_GAP:
+                return outside_c[1], 'outside'
+            # Η έξω-περιμετρικά θέση είναι πέρα από κάθε εύλογη απόσταση:
+            # δοκιμάζεται κοντινή θέση με τον χαλαρό έλεγχο (ανέχεται 1 γραμμή
+            # να διαπερνά) - §6 «προέχει να είναι όσο το δυνατόν πιο κοντά».
+            if not allow_relaxed:
+                _rx = radial_place_full(name, blocks, obstacle_lines, hatch_polys, placed_boxes,
+                                         (own_col,), seed=seed, allow_relaxed=True)
+                if _rx is not None:
+                    _rx = _pull_in(_rx, _mk_check(False, True))
+                    if _dist(_rx) <= PERIM_NEAR_OK:
+                        return _rx, 'nearest'
             if outside_c is not None and outside_c[0] <= 1.5*best_c[0] + 0.4:
                 return outside_c[1], 'outside'
             return best_c[1], best_c[2]

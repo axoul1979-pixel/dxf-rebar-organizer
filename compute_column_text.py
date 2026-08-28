@@ -25,7 +25,7 @@ def _block_text_bboxes_raw(pairlist):
     The true box must stop where the last character ends, so width is estimated from the
     actual decoded character content instead."""
     from analyze import entities_from_pairs, to_dict
-    from beambar_engine import strip_mtext_formatting, text_width
+    from beambar_engine import strip_mtext_formatting, text_width, mtext_rotation_deg
     ents = entities_from_pairs(pairlist)
     boxes = []
     for e in ents:
@@ -34,7 +34,7 @@ def _block_text_bboxes_raw(pairlist):
         d = to_dict(e)
         x = float(d[10][0]); y = float(d[20][0])
         h = float(d.get(40,['0.1'])[0])
-        rot = float(d.get(50,['0'])[0])
+        rot = mtext_rotation_deg(d)
         content = d.get(1,[''])[0]
         w = text_width(content, h)
         boxes.append((x, y, w, h, rot))

@@ -1,6 +1,10 @@
-__pycache__/
+# δοκιμαστικά artifacts
+tests/fixtures/
+build/_extracted.js
 *.pyc
-*.pkl
-*_tidied.dxf
-_s*.dxf
-stage*.dxf
+__pycache__/
+.DS_Store
+
+# προσωπικά DXF έργων - ΜΗΝ ανεβαίνουν
+samples/
+*.dwg

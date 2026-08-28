@@ -126,7 +126,11 @@ def slab_marker_boxes(pairlist):
             continue
         x = float(d[10][0]); y = float(d[20][0])
         h = float(d.get(40,['0.1'])[0])
-        rot = float(d.get(50,['0'])[0])
+        # FESPA MTEXT συχνά ΔΕΝ έχει κωδικό 50 - η στροφή δηλώνεται στο
+        # διάνυσμα 11/21. Χωρίς αυτό, κάθε κατακόρυφο κείμενο μοντελοποιείται
+        # ξαπλωμένο και οι συγκρούσεις του γίνονται αόρατες.
+        from beambar_engine import mtext_rotation_deg
+        rot = mtext_rotation_deg(d)
         content = d.get(1,[''])[0]
         w = text_width(content, h)
         boxes.append((x,y,w,h,rot))
