@@ -2539,7 +2539,12 @@ function dimensionPlan(text, cfgOverride) {
     for (var k = 1; k < ch.length - 1; k++) {
       var cd = ch[k].c;
       if (cd < 10 || cd > 13 || ch[k + 1].c !== cd + 10) continue;
-      if (t === 'HATCH') { if (first10 < 0) { first10 = k; continue; } }  // σημείο αναφοράς
+      /* Τα HATCH αγνοούνται ΕΝΤΕΛΩΣ στο πλαίσιο περιεχομένου: έχουν ΠΟΛΛΑΠΛΑ
+         σημεία αναφοράς/seed points στο (0,0) - όχι μόνο ένα - και τραβούσαν το
+         αριστερό όριο ως το x=0, βάζοντας τις διαστάσεις μέτρα πιο έξω απ' όσο
+         χρειάζεται (ntrafi: κτίριο x[13,4..25,4], αριστερή διάσταση στο -1,26).
+         Η γεωμετρία που γεμίζουν (κολώνες/δοκοί) μετριέται ήδη από τις LINE της. */
+      if (t === 'HATCH') continue;
       var x = parseFloat(ch[k].v), y = parseFloat(ch[k + 1].v);
       putC(px + (sx || 1) * x, py + (sy || 1) * y);
       if (t === 'CIRCLE' || t === 'ARC') {

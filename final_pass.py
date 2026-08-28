@@ -35,6 +35,12 @@ LBL_MAX_ALONG = 1.20
 LBL_MAX_PERP = 0.35
 PAD = 0.0
 
+COL_PERFECT_BONUS = 0.50  # πόσο παραπάνω αξίζει να απομακρυνθεί το κείμενο για
+                          # να βρει ΤΕΛΕΙΑ θέση αντί για «ανάμεσα στα ψηφία»
+COL_OWN_OBVIOUS = 0.30  # §6: σε τόση απόσταση από τη δική του κολώνα η
+                        # ιδιοκτησία είναι οφθαλμοφανής - δεν απορρίπτεται
+COL_NEAR_OK = 0.60   # §6: πάνω από αυτή την απόσταση από τη δική του κολώνα, το
+                     # κείμενο θεωρείται ΜΑΚΡΙΑ και ξαναψάχνεται κοντινότερη θέση
 SLABBAR_RE = r'FL-?\d+_SLABBAR\d+$'
 # §3 «η ετικέτα κάθεται δίπλα στη ράβδο, όχι πάνω της» ισχύει για ΚΑΘΕ ετικέτα
 # οπλισμού - και των δοκών (BEAMBAR), όχι μόνο των πλακών
@@ -1255,6 +1261,15 @@ def final_rebar_relocate(model, rounds=2):
             region, ref = _find_region(model, lines0)
             if region is None:
                 continue          # §0: άγνωστα όρια πλάκας - δεν ρισκάρουμε
+            # ΥΠΟΠΤΗ ΖΩΝΗ: αν η «πλάκα» που αναγνωρίστηκε είναι πολύ στενή σε
+            # σχέση με το μήκος της ίδιας της ράβδου, δεν είναι πλάκα - είναι
+            # λωρίδα δοκού που πέρασε οριακά το φίλτρο, και ο οπλισμός μένει
+            # παγιδευμένος με ΜΗΔΕΝ επιτρεπτές θέσεις (SLABBAR1/9 στο ntrafi:
+            # πλάκα πλάτους 0,60 και 0 θέσεις). Τότε ισχύει το εφεδρικό όριο
+            # ±0,35 από την ΤΡΕΧΟΥΣΑ θέση - συντηρητικό αλλά όχι ακινησία.
+            _bl = max(max(abs(s_[2]-s_[0]), abs(s_[3]-s_[1])) for s_ in lines0)
+            _rw = min(region[2]-region[0], region[3]-region[1])
+            _fallback = (_rw < 0.80 and _rw < 0.6*_bl)
 
             (ux, uy), (px, py) = _axis_and_perp(lines0)
             found = None
@@ -1270,13 +1285,24 @@ def final_rebar_relocate(model, rounds=2):
                     def _dout(x_, y_):
                         return math.hypot(max(0.0, region[0]-x_, x_-region[2]),
                                            max(0.0, region[1]-y_, y_-region[3]))
-                    d0 = _dout(ref[0], ref[1])
-                    dn = _dout(rx, ry)
-                    if d0 <= 1e-9:
-                        if dn > 1e-9:
-                            continue                # ήταν μέσα - μένει μέσα
-                    elif dn > d0 - 1e-9:
-                        continue                    # ήταν έξω - πρέπει να πλησιάζει
+                    if _fallback:
+                        # ύποπτα στενή ζώνη: εφεδρικό όριο ±0,35, όχι ακινησία
+                        if abs(d) > 0.35 + 1e-6:
+                            continue
+                    else:
+                        d0 = _dout(ref[0], ref[1])
+                        dn = _dout(rx, ry)
+                        if d0 <= 1e-9:
+                            if dn > 1e-9:
+                                continue            # ήταν μέσα - μένει μέσα
+                        elif dn > d0 + 1e-9:
+                            # ήταν έξω - αρκεί να ΜΗ ΧΕΙΡΟΤΕΡΕΨΕΙ. Η απαίτηση
+                            # «να πλησιάζει» ήταν λάθος: η κίνηση είναι ΚΑΘΕΤΗ
+                            # στον άξονα της ράβδου, οπότε όταν η υπέρβαση του
+                            # ορίου είναι στον ΑΛΛΟ άξονα δεν μπορεί ποτέ να
+                            # μειωθεί - και ΚΑΜΙΑ θέση δεν περνούσε (SLABBAR3:
+                            # 0,09 έξω σε y, κίνηση σε x -> 0 επιτρεπτές θέσεις).
+                            continue
                     cand = _translate_lines(lines0, px*d, py*d)
                     if _lines_cut_any_text_strict(model, cand, {name}):
                         continue                    # (α) οι γραμμές πρέπει να καθαρίσουν
@@ -1291,6 +1317,61 @@ def final_rebar_relocate(model, rounds=2):
                 if found:
                     break
             if not found:
+                # 2ο ΕΠΙΠΕΔΟ: δεν υπάρχει θέση όπου να καθαρίζουν ΚΑΙ οι γραμμές
+                # ΚΑΙ η ετικέτα. Δεν αφήνουμε όμως τον οπλισμό μόνιμα στον
+                # συνωστισμό του κέντρου της πλάκας: δεχόμαστε ΓΝΗΣΙΩΣ καλύτερη
+                # θέση (λιγότερες συγκρούσεις κατά την ιεραρχία §1), πάντα εντός
+                # της πλάκας του, και μόνο αν ο επανέλεγχος δεν βρει κάτι άλλο
+                # να έχει χαλάσει.
+                def _cost(dd):
+                    cl = _translate_lines(lines0, px*dd, py*dd)
+                    nlines = 0
+                    for _o, _bx in model.text_local.items():
+                        if _o == name or not re.search(_RELOC_TEXT_RE, _o):
+                            continue
+                        for _x, _y, _w, _h, _r in _bx:
+                            _b = text_bbox(_x, _y, _w, _h, _r)
+                            _in = (_b[0]+0.03, _b[1]+0.03, _b[2]-0.03, _b[3]-0.03)
+                            if _in[0] < _in[2] and _in[1] < _in[3] and \
+                               any(seg_intersects_bbox(s_[:4], _in) for s_ in cl):
+                                nlines += 1
+                                break
+                    sv = model.bar_lines[name]
+                    model.bar_lines[name] = cl
+                    sc = _label_badness(model, name, px*dd, py*dd)
+                    model.bar_lines[name] = sv
+                    nl = sum(sc[:6]) if sc else 99
+                    return (nlines + nl, nlines, nl)
+                base = _cost(0.0)
+                bestd = None
+                for k in range(1, MAX_STEPS+1):
+                    for sgn in (1, -1):
+                        d2 = k*STEP*sgn
+                        if not _within_rule(region, ref, px, py, d2):
+                            continue
+                        c2 = _cost(d2)
+                        if c2 < base and (bestd is None or c2 < bestd[1]):
+                            bestd = (d2, c2)
+                if bestd is None:
+                    continue
+                d2 = bestd[0]
+                cand2 = _translate_lines(lines0, px*d2, py*d2)
+                h0 = _health_snapshot(model)
+                saved_l = model.bar_lines[name]
+                saved_t = list(model.text_local[name])
+                model.bar_lines[name] = cand2
+                model.text_local[name] = [(x+px*d2, y+py*d2, w, h, rot)
+                                           for x, y, w, h, rot in saved_t]
+                model.refresh_obstacle_lines_for(name, cand2)
+                _w2 = [k2 for k2 in _health_worse(h0, _health_snapshot(model)) if k2 != name]
+                if _w2:
+                    model.bar_lines[name] = saved_l
+                    model.text_local[name] = saved_t
+                    model.refresh_obstacle_lines_for(name, saved_l)
+                    continue
+                model.deltas[name][0] += px*d2
+                model.deltas[name][1] += py*d2
+                this.append((name, round(px*d2, 2), round(py*d2, 2)))
                 continue
             d, cand, dx, dy = found
             model.deltas[name][0] += dx
@@ -1773,9 +1854,20 @@ def final_column_text_clean(model, rounds=2):
             boxes = [(x, y, w, h, rot) for x, y, w, h, rot in model.text_local[name]]
             excl = {name, own}
             placed = model.placed_boxes_excluding(excl)
-            if P11.is_ok_full(boxes, 0.0, 0.0, model.obstacle_lines, model.hatch_polys,
-                               placed, exclude_line_names=excl):
-                continue                       # ήδη τέλειο
+            _tb0 = None
+            for x, y, w, h, rot in boxes:
+                _b = text_bbox(x, y, w, h, rot)
+                _tb0 = _b if _tb0 is None else (min(_tb0[0], _b[0]), min(_tb0[1], _b[1]),
+                                                 max(_tb0[2], _b[2]), max(_tb0[3], _b[3]))
+            _d0 = _gap(_tb0, cols[own]) if _tb0 else 0.0
+            _clean0 = P11.is_ok_full(boxes, 0.0, 0.0, model.obstacle_lines, model.hatch_polys,
+                                      placed, exclude_line_names=excl)
+            # ΚΑΝΟΝΑΣ ΕΓΓΥΤΗΤΑΣ (§6): το πέρασμα πυροδοτείται ΚΑΙ όταν η θέση
+            # είναι μεν καθαρή αλλά ΜΑΚΡΙΑ από τη δική του κολώνα. Χωρίς αυτό,
+            # ένα κείμενο που η τακτοποίηση έστειλε 2μ μακριά έμενε εκεί για
+            # πάντα, αρκεί να ήταν «τέλειο» εκεί (τεκμηριωμένο: Κ6 0,05 -> 2,23).
+            if _clean0 and _d0 <= COL_NEAR_OK:
+                continue                       # ήδη τέλειο ΚΑΙ κοντά
             contents = [_smf(_td(e).get(1, [''])[0])
                          for e in _efp(model.blocks[name]) if e[0][1] == 'MTEXT']
             tb = None
@@ -1802,8 +1894,20 @@ def final_column_text_clean(model, rounds=2):
                     ldx, ldy = nx-tcx, ny-tcy
                     nb = (tb[0]+ldx, tb[1]+ldy, tb[2]+ldx, tb[3]+ldy)
                     nd_own = _gap(nb, cols[own])
-                    if any(_gap(nb, b2) < nd_own for c2, b2 in cols.items() if c2 != own):
-                        continue               # §6 ιδιοκτησία
+                    # §6 ιδιοκτησία - ΜΕ ΕΞΑΙΡΕΣΗ ΕΓΓΥΤΗΤΑΣ: όταν το κείμενο
+                    # ΑΚΟΥΜΠΑΕΙ σχεδόν τη δική του κολώνα (<=0,30), είναι
+                    # οφθαλμοφανές σε ποια ανήκει, ακόμη κι αν το μακρύ άκρο του
+                    # τυχαίνει να περνά λίγο κοντύτερα σε γειτονική. Χωρίς αυτή
+                    # την εξαίρεση, ένα φαρδύ κείμενο (2,14x0,57) απορρίπτεται σε
+                    # ΚΑΘΕ κοντινή θέση και μένει μέτρα μακριά (Κ6: 4676
+                    # απορρίψεις από ιδιοκτησία, 0 αποδεκτές).
+                    if nd_own > COL_OWN_OBVIOUS and \
+                       any(_gap(nb, b2) < nd_own for c2, b2 in cols.items() if c2 != own):
+                        continue
+                    # αν η τρέχουσα θέση είναι ήδη καθαρή, δεχόμαστε ΜΟΝΟ
+                    # γνησίως κοντινότερη - η εγγύτητα είναι το ζητούμενο
+                    if _clean0 and nd_own >= _d0 - 1e-9:
+                        continue
                     if P11.is_ok_full(boxes, ldx, ldy, model.obstacle_lines,
                                        model.hatch_polys, placed, exclude_line_names=excl):
                         found = (ldx, ldy, 'τέλεια')
@@ -1813,15 +1917,45 @@ def final_column_text_clean(model, rounds=2):
                             model.hatch_polys, placed, exclude_line_names=excl):
                         cg_here = (ldx, ldy, 'ανάμεσα στα ψηφία')
                 if found is None and cg_here is not None:
-                    found = cg_here            # ίδια ακτίνα - η εγγύτητα κερδίζει
+                    # Βρέθηκε θέση «ανάμεσα στα ψηφία». Πριν την κρατήσουμε,
+                    # συνεχίζουμε λίγο ακόμη προς τα έξω (COL_PERFECT_BONUS) για
+                    # ΤΕΛΕΙΑ θέση - μικρή επιπλέον απόσταση αξίζει για κείμενο
+                    # που δεν το κόβει καμία γραμμή. Πέρα από αυτό, η εγγύτητα
+                    # ξανακερδίζει.
+                    _r2 = rad + 0.05
+                    while _r2 <= min(2.50, rad + COL_PERFECT_BONUS):
+                        _n2 = max(24, int(2*math.pi*_r2/0.05))
+                        for k2 in range(_n2):
+                            a2 = 2*math.pi*k2/_n2
+                            nx2, ny2 = ocx + _r2*math.cos(a2), ocy + _r2*math.sin(a2)
+                            l2x, l2y = nx2-tcx, ny2-tcy
+                            nb2 = (tb[0]+l2x, tb[1]+l2y, tb[2]+l2x, tb[3]+l2y)
+                            nd2 = _gap(nb2, cols[own])
+                            if nd2 > COL_OWN_OBVIOUS and \
+                               any(_gap(nb2, b2) < nd2 for c2, b2 in cols.items() if c2 != own):
+                                continue
+                            if _clean0 and nd2 >= _d0 - 1e-9:
+                                continue
+                            if P11.is_ok_full(boxes, l2x, l2y, model.obstacle_lines,
+                                               model.hatch_polys, placed, exclude_line_names=excl):
+                                found = (l2x, l2y, 'τέλεια (λίγο πιο έξω)')
+                                break
+                        if found is not None:
+                            break
+                        _r2 += 0.05
+                    if found is None:
+                        found = cg_here        # καμία τέλεια κοντά - η εγγύτητα κερδίζει
                 rad += 0.05
             if found is None:
                 continue
             ldx, ldy, kind = found
-            # §8 επανέλεγχος: να μη χαλάσει γειτονικό στοιχείο
+            # §8 επανέλεγχος: να μη χαλάσει ΑΛΛΟ, γειτονικό στοιχείο. Το ίδιο το
+            # κείμενο εξαιρείται - η νέα του θέση κρίθηκε ήδη από is_ok_full /
+            # is_ok_chargap, και η μετακίνηση γίνεται για να έρθει ΚΟΝΤΑ (§6).
             h0 = _health_snapshot(model)
             model.text_local[name] = [(x+ldx, y+ldy, w, h, rot) for x, y, w, h, rot in boxes]
-            if _health_worse(h0, _health_snapshot(model)):
+            _w = [k for k in _health_worse(h0, _health_snapshot(model)) if k != name]
+            if _w:
                 model.text_local[name] = boxes
                 continue
             model.deltas[name][0] += ldx
@@ -1885,6 +2019,96 @@ def final_labels_within_bar(model, rounds=2):
             model.label_deltas[name][0] += ldx
             model.label_deltas[name][1] += ldy
             this.append((name, round(ldx, 2), round(ldy, 2)))
+        moved.extend(this)
+        if not this:
+            break
+    return moved
+
+
+LABEL_MIN_SEP = 0.15   # ελάχιστο επιθυμητό διάκενο ανάμεσα σε δύο γειτονικές
+                       # ετικέτες οπλισμού - κάτω από αυτό «στριμώχνονται»
+
+
+def _box_of(model, name):
+    bb = None
+    for x, y, w, h, rot in model.text_local.get(name, []):
+        b = text_bbox(x, y, w, h, rot)
+        bb = b if bb is None else (min(bb[0], b[0]), min(bb[1], b[1]),
+                                    max(bb[2], b[2]), max(bb[3], b[3]))
+    return bb
+
+
+def final_spread_crowded_labels(model, rounds=2):
+    """ΑΡΑΙΩΣΗ ΣΤΡΙΜΩΓΜΕΝΩΝ ΕΤΙΚΕΤΩΝ: δύο ετικέτες οπλισμού που κάθονται πολύ
+    κοντά (κενό < LABEL_MIN_SEP) διαβάζονται δύσκολα ακόμη κι όταν δεν
+    επικαλύπτονται. Εφόσον υπάρχει χώρος, απομακρύνονται με ολίσθηση ΚΑΤΑ ΜΗΚΟΣ
+    της ράβδου τους (§3/§Ι: η ράβδος δεν κινείται, η κάθετη απόσταση δεν αλλάζει).
+    Η νέα θέση γίνεται δεκτή ΜΟΝΟ αν:
+      1) δεν θίγει γειτονικές ετικέτες κολωνών/πλακών/δοκών (επανέλεγχος υγείας)
+      2) η ίδια η ετικέτα δεν τέμνεται από άλλες γραμμές ή ετικέτες
+    Αλλιώς μένει όπου είναι."""
+    moved = []
+    names = sorted([n for n in model.blocks if re.match(REBAR_RE, n)],
+                    key=lambda n: int(re.search(r'\d+$', n).group()))
+    for r_ in range(rounds):
+        this = []
+        for i, a in enumerate(names):
+            ba = _box_of(model, a)
+            if ba is None:
+                continue
+            # ποια γειτονική ετικέτα οπλισμού είναι πολύ κοντά;
+            crowded = None
+            for b in names:
+                if b == a:
+                    continue
+                bb = _box_of(model, b)
+                if bb is None:
+                    continue
+                g = _gap(ba, bb)
+                if g < LABEL_MIN_SEP:
+                    crowded = (b, g)
+                    break
+            if crowded is None:
+                continue
+            g0 = _label_geom(model, a)
+            if g0 is None:
+                continue
+            (ux, uy), (px, py), lo, hi, bb0, boxes = g0
+            cur = _label_badness(model, a, 0.0, 0.0)
+            ct = ((bb0[0]+bb0[2])/2)*ux + ((bb0[1]+bb0[3])/2)*uy
+            best = None
+            for k in range(1, 9):                      # έως 0,40 με βήμα 0,05
+                for sgn in (1, -1):
+                    dt = k*LBL_STEP*sgn
+                    if not (lo-0.05 <= ct+dt <= hi+0.05):
+                        continue
+                    ldx, ldy = ux*dt, uy*dt            # ΜΟΝΟ κατά μήκος
+                    sc = _label_badness(model, a, ldx, ldy)
+                    if sc is None or sc[:6] > cur[:6]:
+                        continue                       # (2) να μη χειροτερέψει
+                    nb = (ba[0]+ldx, ba[1]+ldy, ba[2]+ldx, ba[3]+ldy)
+                    ng = min((_gap(nb, _box_of(model, b2)) for b2 in names
+                               if b2 != a and _box_of(model, b2)), default=9.0)
+                    if ng <= crowded[1] + 1e-9:
+                        continue                       # δεν αραίωσε
+                    if best is None or ng > best[2]:
+                        best = (ldx, ldy, ng)
+                if best is not None and best[2] >= LABEL_MIN_SEP:
+                    break
+            if best is None:
+                continue
+            ldx, ldy, ng = best
+            h0 = _health_snapshot(model)
+            saved = list(model.text_local[a])
+            model.text_local[a] = [(x+ldx, y+ldy, w, h, rot) for x, y, w, h, rot in saved]
+            # (1) καμία γειτονική ετικέτα/κείμενο δεν πρέπει να χειροτερέψει
+            if _health_worse(h0, _health_snapshot(model)):
+                model.text_local[a] = saved
+                continue
+            model.label_deltas[a][0] += ldx
+            model.label_deltas[a][1] += ldy
+            this.append((a, round(ldx, 2), round(ldy, 2),
+                          'κενό %.2f->%.2f' % (crowded[1], ng)))
         moved.extend(this)
         if not this:
             break
@@ -2001,6 +2225,10 @@ def run(input_path, output_path, rounds=4, orig_path=None):
     slab_clean = final_slab_label_clean(model)
     if slab_clean:
         print('ΤΕΛΕΥΤΑΙΟ ΒΗΜΑ (ετικέτες πλακών -> καθαρή θέση):', len(slab_clean), slab_clean)
+
+    spread = final_spread_crowded_labels(model)
+    if spread:
+        print('ΑΡΑΙΩΣΗ στριμωγμένων ετικετών οπλισμού:', len(spread), spread[:6])
 
     beam_clean = final_beam_label_clean(model)
     if beam_clean:
