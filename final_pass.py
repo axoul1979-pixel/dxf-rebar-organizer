@@ -1269,7 +1269,14 @@ def final_rebar_relocate(model, rounds=2):
             # ±0,35 από την ΤΡΕΧΟΥΣΑ θέση - συντηρητικό αλλά όχι ακινησία.
             _bl = max(max(abs(s_[2]-s_[0]), abs(s_[3]-s_[1])) for s_ in lines0)
             _rw = min(region[2]-region[0], region[3]-region[1])
-            _fallback = (_rw < 0.80 and _rw < 0.6*_bl)
+            # Το εφεδρικό όριο ισχύει ΜΟΝΟ για οπλισμό που είναι ΗΔΗ ΕΞΩ από τη
+            # ζώνη του και άρα παγιδευμένος (καμία επιτρεπτή θέση). Αν είναι
+            # ΜΕΣΑ, το §0 παραμένει ΑΠΑΡΑΒΑΤΟ - αλλιώς το fallback τον βγάζει
+            # έξω από τη δική του πλάκα (SLABBAR18: πλάκα x[18,95-19,55], ο
+            # οπλισμός βρέθηκε στο 18,65).
+            _ref_out = (ref[0] < region[0] or ref[0] > region[2] or
+                        ref[1] < region[1] or ref[1] > region[3])
+            _fallback = (_ref_out and _rw < 0.80 and _rw < 0.6*_bl)
 
             (ux, uy), (px, py) = _axis_and_perp(lines0)
             found = None
@@ -1286,8 +1293,11 @@ def final_rebar_relocate(model, rounds=2):
                         return math.hypot(max(0.0, region[0]-x_, x_-region[2]),
                                            max(0.0, region[1]-y_, y_-region[3]))
                     if _fallback:
-                        # ύποπτα στενή ζώνη: εφεδρικό όριο ±0,35, όχι ακινησία
+                        # ύποπτα στενή ζώνη: εφεδρικό όριο ±0,35 αντί για
+                        # ακινησία - ΑΛΛΑ ποτέ πιο έξω απ' ό,τι ήδη είναι (§0)
                         if abs(d) > 0.35 + 1e-6:
+                            continue
+                        if _dout(rx, ry) > _dout(ref[0], ref[1]) + 1e-9:
                             continue
                     else:
                         d0 = _dout(ref[0], ref[1])
@@ -2025,7 +2035,7 @@ def final_labels_within_bar(model, rounds=2):
     return moved
 
 
-LABEL_MIN_SEP = 0.15   # ελάχιστο επιθυμητό διάκενο ανάμεσα σε δύο γειτονικές
+LABEL_MIN_SEP = 0.17   # ελάχιστο επιθυμητό διάκενο ανάμεσα σε δύο γειτονικές
                        # ετικέτες οπλισμού - κάτω από αυτό «στριμώχνονται»
 
 
@@ -2077,9 +2087,12 @@ def final_spread_crowded_labels(model, rounds=2):
             cur = _label_badness(model, a, 0.0, 0.0)
             ct = ((bb0[0]+bb0[2])/2)*ux + ((bb0[1]+bb0[3])/2)*uy
             best = None
-            for k in range(1, 9):                      # έως 0,40 με βήμα 0,05
+            # λεπτό βήμα 0,02: πολλά ζεύγη χρειάζονται ελάχιστη απομάκρυνση για
+            # να ξεκολλήσουν, και με βήμα 0,05 προσπερνιόνταν
+            _steps = [k*0.02 for k in range(1, 21)]    # έως 0,40 ανά 0,02
+            for k in range(len(_steps)):
                 for sgn in (1, -1):
-                    dt = k*LBL_STEP*sgn
+                    dt = _steps[k]*sgn
                     if not (lo-0.05 <= ct+dt <= hi+0.05):
                         continue
                     ldx, ldy = ux*dt, uy*dt            # ΜΟΝΟ κατά μήκος
@@ -2109,6 +2122,262 @@ def final_spread_crowded_labels(model, rounds=2):
             model.label_deltas[a][1] += ldy
             this.append((a, round(ldx, 2), round(ldy, 2),
                           'κενό %.2f->%.2f' % (crowded[1], ng)))
+        moved.extend(this)
+        if not this:
+            break
+    return moved
+
+
+def final_center_labels(model, rounds=2):
+    """ΚΑΝΟΝΙΣΜΟΣ §3: η ετικέτα οπλισμού κάθεται «κατά προτίμηση ΚΕΝΤΡΑΡΙΣΜΕΝΗ»
+    στο μήκος της ράβδου της. Εδώ φέρνεται όσο πιο κοντά στο κέντρο γίνεται, με
+    ολίσθηση ΜΟΝΟ κατά μήκος, και ΜΟΝΟ αν στη νέα θέση:
+      - δεν χειροτερεύει η ίδια (τομές/επικαλύψεις/hatch), και
+      - δεν θίγεται καμία γειτονική ετικέτα ή κείμενο (επανέλεγχος §8).
+    Αλλιώς μένει όπου είναι - το κεντράρισμα είναι προτίμηση, όχι απαίτηση."""
+    moved = []
+    names = sorted([n for n in model.blocks if re.match(REBAR_RE, n)],
+                    key=lambda n: int(re.search(r'\d+$', n).group()))
+    for r_ in range(rounds):
+        this = []
+        for name in names:
+            g = _label_geom(model, name)
+            if g is None:
+                continue
+            (ux, uy), (px, py), lo, hi, bb, boxes = g
+            ct = ((bb[0]+bb[2])/2)*ux + ((bb[1]+bb[3])/2)*uy
+            mid = (lo+hi)/2
+            off0 = abs(ct-mid)
+            if off0 <= 0.30:
+                continue                       # ήδη αρκετά κεντραρισμένη
+            cur = _label_badness(model, name, 0.0, 0.0)
+            if cur is None:
+                continue
+            best = None
+            steps = int(min(off0, 2.0)/LBL_STEP) + 1
+            for k in range(steps, 0, -1):      # από τη ΜΕΓΑΛΥΤΕΡΗ διόρθωση προς τα κάτω
+                dt = k*LBL_STEP * (1 if mid > ct else -1)
+                nt = ct+dt
+                if not (lo+0.02 <= nt <= hi-0.02):
+                    continue
+                if abs(nt-mid) >= off0 - 1e-9:
+                    continue                   # δεν πλησιάζει το κέντρο
+                ldx, ldy = ux*dt, uy*dt        # ΜΟΝΟ κατά μήκος
+                sc = _label_badness(model, name, ldx, ldy)
+                if sc is None or sc[:6] > cur[:6]:
+                    continue                   # να μη χειροτερέψει
+                best = (ldx, ldy, abs(nt-mid))
+                break                          # η πιο κεντρική αποδεκτή
+            if best is None:
+                continue
+            ldx, ldy, noff = best
+            h0 = _health_snapshot(model)
+            saved = list(model.text_local[name])
+            model.text_local[name] = [(x+ldx, y+ldy, w, h, rot) for x, y, w, h, rot in saved]
+            if [k2 for k2 in _health_worse(h0, _health_snapshot(model)) if k2 != name]:
+                model.text_local[name] = saved
+                continue
+            model.label_deltas[name][0] += ldx
+            model.label_deltas[name][1] += ldy
+            this.append((name, round(ldx, 2), round(ldy, 2),
+                          'κέντρο %.2f->%.2f' % (off0, noff)))
+        moved.extend(this)
+        if not this:
+            break
+    return moved
+
+
+def final_restore_beambars(model, rounds=2):
+    """ΟΠΛΙΣΜΟΣ ΔΟΚΟΥ (BEAMBAR): ανήκει στη δοκό του και δεν έχει λόγο να
+    απομακρύνεται από αυτήν. Η τακτοποίηση όμως τον μετατοπίζει για να λύσει
+    συγκρούσεις (μετρημένο στο ntrafi: BEAMBAR27 -0,81, BEAMBAR34 -0,75).
+    Εδώ επαναφέρεται προς την ΑΡΧΙΚΗ του θέση - που είναι εξ ορισμού η σωστή ως
+    προς τη δοκό του - όσο το επιτρέπει ο έλεγχος: κάθε ενδιάμεσο βήμα δοκιμάζεται
+    από τη μεγαλύτερη επαναφορά προς τη μικρότερη, και γίνεται δεκτό μόνο αν
+    ούτε ο ίδιος χειροτερεύει ούτε θίγεται γειτονικό στοιχείο (§8)."""
+    if model.orig_ins is None:
+        return []
+    moved = []
+    names = sorted([n for n in model.blocks if re.match(r'FL-?\d+_BEAMBAR\d+$', n)],
+                    key=lambda n: int(re.search(r'\d+$', n).group()))
+    for r_ in range(rounds):
+        this = []
+        for name in names:
+            if name not in model.orig_ins:
+                continue
+            d_now = model.ins.get(name, (0.0, 0.0))
+            cur = (d_now[0]+model.deltas[name][0], d_now[1]+model.deltas[name][1])
+            org = model.orig_ins[name]
+            offx, offy = org[0]-cur[0], org[1]-cur[1]
+            if math.hypot(offx, offy) < 0.05:
+                continue                       # ήδη στη θέση του
+            lines0 = model.bar_lines.get(name)
+            if not lines0:
+                continue
+            base = _label_badness(model, name, 0.0, 0.0)
+            base_cut = _lines_cut_any_text_strict(model, lines0, {name})
+            best = None
+            for frac in [i/10.0 for i in range(10, 0, -1)]:   # 100% -> 10% επαναφορά
+                dx, dy = offx*frac, offy*frac
+                cand = _translate_lines(lines0, dx, dy)
+                if _lines_cut_any_text_strict(model, cand, {name}) and not base_cut:
+                    continue
+                sv = model.bar_lines[name]
+                model.bar_lines[name] = cand
+                sc = _label_badness(model, name, dx, dy)
+                model.bar_lines[name] = sv
+                if sc is None or (base is not None and sc[:6] > base[:6]):
+                    continue
+                best = (dx, dy, cand, frac)
+                break                          # η μεγαλύτερη αποδεκτή επαναφορά
+            if best is None:
+                continue
+            dx, dy, cand, frac = best
+            h0 = _health_snapshot(model)
+            sv_l = model.bar_lines[name]; sv_t = list(model.text_local.get(name, []))
+            model.bar_lines[name] = cand
+            model.text_local[name] = [(x+dx, y+dy, w, h, rot) for x, y, w, h, rot in sv_t]
+            model.refresh_obstacle_lines_for(name, cand)
+            if [k for k in _health_worse(h0, _health_snapshot(model)) if k != name]:
+                model.bar_lines[name] = sv_l
+                model.text_local[name] = sv_t
+                model.refresh_obstacle_lines_for(name, sv_l)
+                continue
+            model.deltas[name][0] += dx
+            model.deltas[name][1] += dy
+            this.append((name, round(dx, 2), round(dy, 2), '%d%%' % (frac*100)))
+        moved.extend(this)
+        if not this:
+            break
+    return moved
+
+
+BEAMBAR_NEAR_MIN = 0.05   # επιθυμητό παράθυρο απόστασης οπλισμού δοκού από
+BEAMBAR_NEAR_MAX = 0.15   # την πλησιέστερη δοκό του
+
+
+def final_beambars_to_beam(model, rounds=2):
+    """ΝΕΟΣ ΚΑΝΟΝΑΣ: ο οπλισμός δοκού πλησιάζει ΚΑΘΕΤΑ τη δοκό στην οποία
+    ανήκει - ακόμη κι αν το FESPA τον σχεδίασε πιο μακριά.
+      - «δοκός του» = η ΠΛΗΣΙΕΣΤΕΡΗ γεωμετρικά.
+      - στόχος: απόσταση 0,05-0,15 από την παρειά της.
+      - κίνηση ΜΟΝΟ κάθετα στον άξονα της ράβδου, σταθερό βήμα.
+      - η ετικέτα ακολουθεί (κρατά την αρχική κάθετη απόστασή της, §Ι).
+    Δεκτό μόνο αν στη νέα θέση: δεν θίγονται γειτονικά κείμενα/ετικέτες
+    (κείμενο δοκού, κείμενο υποστυλώματος κ.λπ.) ΚΑΙ η ίδια η ετικέτα του δεν
+    τέμνεται από γειτονικές γραμμές ή κείμενα. Αλλιώς μένει όπου είναι."""
+    def gap(a, b):
+        return math.hypot(max(0.0, a[0]-b[2], b[0]-a[2]), max(0.0, a[1]-b[3], b[1]-a[3]))
+
+    beams = {}
+    for c in model.blocks:
+        if re.match(r'FL-?\d+_BEAM\d+$', c) and 'TEXT' not in c and 'BAR' not in c:
+            wl = _world_lines(model.blocks, model.ins, c)
+            if wl:
+                xs = [p for s_ in wl for p in (s_[0], s_[2])]
+                ys = [p for s_ in wl for p in (s_[1], s_[3])]
+                beams[c] = (min(xs), min(ys), max(xs), max(ys))
+    if not beams:
+        return []
+    moved = []
+    names = sorted([n for n in model.blocks if re.match(r'FL-?\d+_BEAMBAR\d+$', n)],
+                    key=lambda n: int(re.search(r'\d+$', n).group()))
+    for r_ in range(rounds):
+        this = []
+        for name in names:
+            lines0 = model.bar_lines.get(name)
+            if not lines0:
+                continue
+            # ΚΡΙΤΗΡΙΟ: η απόσταση μετριέται από την ΕΤΙΚΕΤΑ, όχι από τη ράβδο.
+            # Το bbox μιας μακριάς ράβδου επικαλύπτει ούτως ή άλλως τη δοκό
+            # (απόσταση 0), οπότε ο κανόνας δεν πυροδοτούνταν ποτέ - ενώ αυτό
+            # που φαίνεται μακριά στο σχέδιο είναι η ετικέτα (BEAMBAR14: ράβδος
+            # 0,00 από τη δοκό, ετικέτα 0,46).
+            lb0 = _box_of(model, name)
+            if lb0 is None:
+                continue
+            near = min(((gap(lb0, b), c) for c, b in beams.items()), default=None)
+            if near is None:
+                continue
+            d_now, own_beam = near
+            # ΠΛΕΥΡΑ: το «Ανω» πάει στην πάνω/δεξιά πλευρά της δοκού, το «Κάτω»
+            # στην κάτω/αριστερή - όπως διαβάζεται το σχέδιο. Χωρίς αυτό ο
+            # οπλισμός πλησίαζε από όποια πλευρά τύχαινε (BEAMBAR14 «1Φ14 Ανω»
+            # πλησίασε από τα αριστερά, ενώ ανήκει στην απέναντι πλευρά).
+            _txt = ''
+            for _e in entities_from_pairs(model.blocks[name]):
+                if _e[0][1] == 'MTEXT':
+                    from beambar_engine import strip_mtext_formatting as _smf3
+                    _raw = to_dict(_e).get(1, [''])[0]
+                    # τα FESPA MTEXT γράφουν τα ελληνικά ως \U+03BD escapes -
+                    # χωρίς αποκωδικοποίηση το «Ανω»/«Κάτω» δεν αναγνωρίζεται ποτέ
+                    _txt = re.sub(r'\\U\+([0-9A-Fa-f]{4})',
+                                   lambda mm: chr(int(mm.group(1), 16)), _smf3(_raw))
+                    break
+            _want = None
+            if 'νω' in _txt:            # «Ανω»
+                _want = +1
+            elif 'άτω' in _txt or 'ατω' in _txt:   # «Κάτω»
+                _want = -1
+            if d_now <= BEAMBAR_NEAR_MAX:
+                continue                       # ήδη κοντά στη δοκό του
+            ob = beams[own_beam]
+            (ux, uy), (px, py) = _axis_and_perp(lines0)
+            base = _label_badness(model, name, 0.0, 0.0)
+            best = None
+            for k in range(1, MAX_STEPS+1):
+                for sgn in (1, -1):
+                    d = k*STEP*sgn
+                    cand = _translate_lines(lines0, px*d, py*d)
+                    # κινείται η ΡΑΒΔΟΣ (επιλογή Α) - η ετικέτα ακολουθεί
+                    # κρατώντας άθικτη την αρχική κάθετη απόστασή της (§Ι)
+                    nlb = (lb0[0]+px*d, lb0[1]+py*d, lb0[2]+px*d, lb0[3]+py*d)
+                    nd = gap(nlb, ob)
+                    if nd >= d_now - 1e-9:
+                        continue               # δεν πλησιάζει
+                    if _want is not None:
+                        # ποια πλευρά της δοκού; κατακόρυφη δοκός -> δεξιά/αριστερά,
+                        # οριζόντια -> πάνω/κάτω
+                        _vert = (ob[3]-ob[1]) >= (ob[2]-ob[0])
+                        if _vert:
+                            _side = +1 if (nlb[0]+nlb[2])/2 > (ob[0]+ob[2])/2 else -1
+                        else:
+                            _side = +1 if (nlb[1]+nlb[3])/2 > (ob[1]+ob[3])/2 else -1
+                        if _side != _want:
+                            continue           # λάθος πλευρά για «Ανω»/«Κάτω»
+                    # η ετικέτα δεν επιτρέπεται να χειροτερέψει
+                    sv = model.bar_lines[name]
+                    model.bar_lines[name] = cand
+                    sc = _label_badness(model, name, px*d, py*d)
+                    model.bar_lines[name] = sv
+                    if sc is None or (base is not None and sc[:6] > base[:6]):
+                        continue
+                    # ούτε οι γραμμές του να κόβουν κείμενα
+                    if _lines_cut_any_text_strict(model, cand, {name}) and \
+                       not _lines_cut_any_text_strict(model, lines0, {name}):
+                        continue
+                    score = abs(nd - (BEAMBAR_NEAR_MIN+BEAMBAR_NEAR_MAX)/2)
+                    if best is None or score < best[3]:
+                        best = (d, cand, nd, score)
+                if best is not None and best[2] <= BEAMBAR_NEAR_MAX:
+                    break
+            if best is None:
+                continue
+            d, cand, nd, _sc = best
+            h0 = _health_snapshot(model)
+            sv_l = model.bar_lines[name]; sv_t = list(model.text_local.get(name, []))
+            model.bar_lines[name] = cand
+            model.text_local[name] = [(x+px*d, y+py*d, w, h, rot) for x, y, w, h, rot in sv_t]
+            model.refresh_obstacle_lines_for(name, cand)
+            if [k2 for k2 in _health_worse(h0, _health_snapshot(model)) if k2 != name]:
+                model.bar_lines[name] = sv_l
+                model.text_local[name] = sv_t
+                model.refresh_obstacle_lines_for(name, sv_l)
+                continue
+            model.deltas[name][0] += px*d
+            model.deltas[name][1] += py*d
+            this.append((name, round(px*d, 2), round(py*d, 2),
+                          '%s %.2f->%.2f' % (own_beam.split('_')[-1], d_now, nd)))
         moved.extend(this)
         if not this:
             break
@@ -2225,6 +2494,20 @@ def run(input_path, output_path, rounds=4, orig_path=None):
     slab_clean = final_slab_label_clean(model)
     if slab_clean:
         print('ΤΕΛΕΥΤΑΙΟ ΒΗΜΑ (ετικέτες πλακών -> καθαρή θέση):', len(slab_clean), slab_clean)
+
+    bb_near = final_beambars_to_beam(model)
+    if bb_near:
+        print('ΝΕΟΣ ΚΑΝΟΝΑΣ - οπλισμοί δοκών κοντά στη δοκό τους:', len(bb_near), bb_near[:6])
+
+    # Η «επαναφορά προς την ΑΡΧΙΚΗ θέση» αφαιρέθηκε: ο στόχος δεν είναι η θέση
+    # που είχε το FESPA αλλά η ΕΓΓΥΤΗΤΑ ΣΤΗ ΔΟΚΟ (final_beambars_to_beam). Οι
+    # δύο κανόνες συγκρούονταν - όταν η τακτοποίηση είχε ήδη φέρει τον οπλισμό
+    # κοντά στη δοκό, η επαναφορά τον τραβούσε πάλι μακριά (BEAMBAR14: κοντά στο
+    # tidy -> 0,37 μακριά μετά την «επαναφορά»).
+
+    centered = final_center_labels(model)
+    if centered:
+        print('§3 κεντράρισμα ετικετών οπλισμού:', len(centered), centered[:5])
 
     spread = final_spread_crowded_labels(model)
     if spread:
