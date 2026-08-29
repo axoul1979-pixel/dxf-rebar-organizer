@@ -558,7 +558,9 @@ def _marker_move_ok(sname, ddx, ddy):
     if not y_ok and abs(ddy) > 0.35 + 1e-6: return False
     if abs(ddx) > 1.5 or abs(ddy) > 1.5: return False
     return True
-SLABBAR_HOME_SLAB = {}   # SLABBARn -> επιτρεπόμενο κουτί (απόλυτες συντεταγμένες)
+SLABBAR_HOME_SLAB = {}
+SLAB_REGIONS_ALL = []   # όλες οι περιοχές πλακών - για τον κανόνα προεξοχής
+NATIVE_INS = {}         # ΦΥΣΙΚΟ insert κάθε block - ΑΠΑΡΑΙΤΗΤΟ για σωστές συντεταγμένες   # SLABBARn -> επιτρεπόμενο κουτί (απόλυτες συντεταγμένες)
 
 def _slabbar_bounds_ok(name, lines, ndx, ndy, tol=0.02):
     """ΚΑΝΟΝΑΣ: ράβδος πλάκας (SLABBAR) δεν επιτρέπεται ΠΟΤΕ να βγει από την
@@ -585,10 +587,48 @@ def _slabbar_bounds_ok(name, lines, ndx, ndy, tol=0.02):
         # μηδενική μετατόπιση.
         return abs(ndx) < 1e-9 and abs(ndy) < 1e-9
     ax1, ay1, ax2, ay2 = box
+    # ΣΥΝΤΕΤΑΓΜΕΝΕΣ: το `box` (όρια πλάκας) είναι σε ΑΠΟΛΥΤΕΣ συντεταγμένες,
+    # ενώ τα `lines` είναι ΤΟΠΙΚΑ και το (ndx,ndy) ΣΧΕΤΙΚΗ μετατόπιση. Χωρίς
+    # πρόσθεση του ΦΥΣΙΚΟΥ insert του block συγκρίναμε μήλα με πορτοκάλια:
+    # η ράβδος κρινόταν σε λάθος θέση, οπότε «νόμιμες» μετακινήσεις την
+    # έβγαζαν ΕΚΤΟΣ της πλάκας της (π.χ. το Φ10/20 έξω από την Π2).
+    _nx0, _ny0 = NATIVE_INS.get(name, (0.0, 0.0))
+    ndx = ndx + _nx0
+    ndy = ndy + _ny0
+    # ΔΙΟΡΘΩΣΗ ΚΡΙΣΙΜΟΥ ΛΑΘΟΥΣ: παλιά απαιτούνταν ΟΛΑ τα άκρα της ράβδου να
+    # είναι μέσα στο κουτί της πλάκας. Έτσι κάθε ράβδος ΜΕΓΑΛΥΤΕΡΗ από την
+    # πλάκα της (συνεχής ράβδος ή οπλισμός προβόλου - το τμήμα που προεξέχει
+    # πέφτει στη ΓΕΙΤΟΝΙΚΗ πλάκα, απολύτως νόμιμο) απορριπτόταν σε ΚΑΘΕ θέση,
+    # δηλαδή ΠΑΓΩΝΕ εντελώς. Μετρήθηκε στο SLABBAR27: ράβδος 7.94μ σε πλάκα
+    # 5.80μ -> καμία επιτρεπτή μετακίνηση, ενώ στην πραγματικότητα ΜΠΟΡΕΙ να
+    # μετακινηθεί ΕΓΚΑΡΣΙΑ μέσα στα όρια της πλάκας της.
+    # ΣΩΣΤΟΣ ΚΑΝΟΝΑΣ: δεσμεύεται ΜΟΝΟ η ΕΓΚΑΡΣΙΑ θέση (κάθετα στον άξονα της
+    # ράβδου). Κατά ΜΗΚΟΣ του άξονά της η ράβδος ελεύθερα προεξέχει.
+    try:
+        (ux_, uy_), _bnd_ = spine_and_bounds(lines)
+    except Exception:
+        ux_, uy_ = 1.0, 0.0
+    _vertical = abs(uy_) >= abs(ux_)
     for x1, y1, x2, y2 in lines:
         for qx, qy in ((x1+ndx, y1+ndy), (x2+ndx, y2+ndy)):
-            if qx < ax1-tol or qx > ax2+tol or qy < ay1-tol or qy > ay2+tol:
-                return False
+            if _vertical:
+                # ράβδος κατά y -> ελέγχεται ΜΟΝΟ το x (εγκάρσια)
+                if qx < ax1-tol or qx > ax2+tol:
+                    return False
+            else:
+                # ράβδος κατά x -> ελέγχεται ΜΟΝΟ το y (εγκάρσια)
+                if qy < ay1-tol or qy > ay2+tol:
+                    return False
+    # ΚΑΝΟΝΑΣ ΠΡΟΕΞΟΧΗΣ: το τμήμα που ΠΡΟΕΞΕΧΕΙ από την πλάκα του επιτρέπεται
+    # ΜΟΝΟ αν πέφτει πάνω σε ΑΛΛΗ ΠΛΑΚΑ - ποτέ στο κενό. Χωρίς αυτό, η ράβδος
+    # μπορούσε να μετακινηθεί εγκάρσια τόσο ώστε η άκρη της να κρέμεται εκτός
+    # κτιρίου.
+    if SLAB_REGIONS_ALL:
+        for x1, y1, x2, y2 in lines:
+            for qx, qy in ((x1+ndx, y1+ndy), (x2+ndx, y2+ndy)):
+                if not any(rx1-0.35 <= qx <= rx2+0.35 and ry1-0.35 <= qy <= ry2+0.35
+                            for rx1, ry1, rx2, ry2 in SLAB_REGIONS_ALL):
+                    return False
     return True
 
 BEAMBAR_SIDE = {}   # BEAMBARn -> (nx, ny, ref_perp, side): η πλευρά της ράβδου
@@ -1063,6 +1103,7 @@ def beam_text_slide(name, blocks, obstacle_lines, hatch_polys, placed_boxes, rel
 def process_all(input_path, is_training_file=False):
     global REBAR_NAMES, STRICT_MODE
     ins, blocks = load_all(input_path)
+    NATIVE_INS.clear(); NATIVE_INS.update(ins)   # ΠΡΙΝ από κάθε έλεγχο ορίων
     obstacle_lines = build_obstacle_lines(blocks, ins)
     hatch_polys = get_hatch_polys(input_path)
     REBAR_NAMES = set(n for n in blocks if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', n))
@@ -1646,7 +1687,21 @@ def process_all(input_path, is_training_file=False):
                         cx_ = float(d_[10][0])+ox_+ctdx
                         cy_ = float(d_[20][0])+oy_+ctdy
                         r_ = float(d_[40][0])
-                        out.append(((cx_-r_, cy_-r_, cx_+r_, cy_+r_), sn))
+                        # Η οντότητα CIRCLE `slab_center` είναι ΜΙΚΡΟΤΕΡΗ από
+                        # τον δείκτη όπως ΣΧΕΔΙΑΖΕΤΑΙ: μετρήθηκε r=0.258 ενώ ο
+                        # δείκτης πιάνει 0.73 πλάτος. Ετικέτες που κάθονταν
+                        # ΠΑΝΩ στο κυκλάκι ήταν ΑΟΡΑΤΕΣ στη βαθμολόγηση (11
+                        # τέτοιες, ενώ ο έλεγχος ανέφερε 2). Η πραγματική
+                        # ακτίνα βγαίνει από τις ΓΡΑΜΜΕΣ του ίδιου του block,
+                        # αγνοώντας τα μακρινά σημεία του «μουστακιού».
+                        _ln9, _u9 = block_lines_local(blocks[sn])
+                        _rr9 = r_
+                        for _a9, _b9, _c9, _d9 in _ln9:
+                            for _px9, _py9 in ((_a9, _b9), (_c9, _d9)):
+                                _dd9 = math.hypot(_px9+ox_+ctdx-cx_, _py9+oy_+ctdy-cy_)
+                                if _dd9 <= 2.2*r_ and _dd9 > _rr9:
+                                    _rr9 = _dd9
+                        out.append(((cx_-_rr9, cy_-_rr9, cx_+_rr9, cy_+_rr9), sn))
         return out
 
     def _internal_bad_count():
@@ -4088,6 +4143,754 @@ def process_all(input_path, is_training_file=False):
             if False and not _newhit and _is_closed_pi_bar(ln9):  # BISECT
                 COLLAPSE_BARS.add(rn9)
 
+    # ========================================================================
+    # ΒΕΛΤΙΣΤΟΠΟΙΗΣΗ ΜΕ ΑΝΤΙΚΕΙΜΕΝΙΚΗ ΣΥΝΑΡΤΗΣΗ ΤΑ ΚΡΙΤΗΡΙΑ ΤΟΥ ΕΛΕΓΧΟΥ
+    # ------------------------------------------------------------------------
+    # Όλα τα προηγούμενα περάσματα λύνουν ΤΟΠΙΚΑ ζευγάρια συγκρούσεων με δικά
+    # τους κριτήρια (πυρήνας κειμένου, χαλαρά/αυστηρά περάσματα κ.λπ.). Γι' αυτό
+    # μπορούσαν να «λύσουν» ένα ζευγάρι και να ανοίξουν δύο αλλού: κανείς δεν
+    # μετρούσε ΠΟΤΕ το ΣΥΝΟΛΙΚΟ αποτέλεσμα με τα ΙΔΙΑ κριτήρια που κρίνει ο
+    # τελικός έλεγχος.
+    #
+    # Εδώ γίνεται πραγματική βελτιστοποίηση: αντικειμενική συνάρτηση = ο ΑΡΙΘΜΟΣ
+    # ΠΑΡΑΒΙΑΣΕΩΝ με τα κριτήρια του audit. Για κάθε στοιχείο δοκιμάζονται
+    # υποψήφιες θέσεις (η φυσική του θέση, η τωρινή, και μετατοπίσεις) και
+    # κρατιέται μόνο ό,τι ΜΕΙΩΝΕΙ ΑΥΣΤΗΡΑ το σύνολο. Επειδή η μετακίνηση ενός
+    # στοιχείου αλλάζει ΜΟΝΟ τις παραβιάσεις που το εμπλέκουν, το δέλτα
+    # υπολογίζεται τοπικά αλλά είναι ΑΚΡΙΒΕΣ - άρα καμία αποδεκτή κίνηση δεν
+    # μπορεί να χειροτερεύσει το σύνολο. Επαναλαμβάνεται μέχρι κανένα στοιχείο
+    # να μη βρίσκει βελτίωση (fixpoint).
+    _STRUCT9 = []
+    for _sn in blocks:
+        if re.match(r'FL-?\d+_(BEAM|COLUMN)\d+$', _sn) and 'TEXT' not in _sn:
+            _ox, _oy = ins.get(_sn, (0, 0))
+            _ls, _ = block_lines_local(blocks[_sn])
+            _STRUCT9 += [(a+_ox, b+_oy, c+_ox, d+_oy, _sn) for a, b, c, d in _ls]
+
+    def _own_struct9(n):
+        m = re.match(r'(FL-?\d+_)BEAM_TEXT(\d+)$', n)
+        if m: return {n, m.group(1)+'BEAM'+m.group(2)}
+        m = re.match(r'(FL-?\d+_)COLUMN_TEXT(\d+)$', n)
+        if m: return {n, m.group(1)+'COLUMN'+m.group(2)}
+        return {n}
+
+    def _abs9(n):
+        """ΠΡΑΓΜΑΤΙΚΗ απόλυτη μετατόπιση του block.
+
+        ΚΡΙΣΙΜΟ: το `insert_final` είναι ΣΧΕΤΙΚΗ μετατόπιση ως προς το ΦΥΣΙΚΟ
+        insert του block (έτσι το εφαρμόζει το run_any/patch_dxf) - ΕΚΤΟΣ από
+        τα COLUMN_TEXT, όπου κρατείται απόλυτο και το run_any αφαιρεί το
+        φυσικό. Ο βελτιστοποιητής υπολόγιζε τα κουτιά ΧΩΡΙΣ το φυσικό insert,
+        άρα τοποθετούσε κάθε block με μη-μηδενικό φυσικό insert σε ΛΑΘΟΣ θέση.
+        Μετρήθηκε: FL0_SLABBAR27 έχει φυσικό insert (-0.901, 0.052), δηλαδή ο
+        βελτιστοποιητής το «έβλεπε» 90 εκατοστά μακριά από την πραγματική του
+        θέση - γι' αυτό ανέφερε viol=0 ενώ στο σχέδιο η ετικέτα του έπεφτε
+        πάνω στο BEAM_TEXT18."""
+        dx9, dy9 = insert_final.get(n, (0, 0))
+        if re.match(r'FL-?\d+_COLUMN_TEXT\d+$', n):
+            return dx9, dy9
+        nx9, ny9 = ins.get(n, (0.0, 0.0))
+        return dx9 + nx9, dy9 + ny9
+
+    def _boxes9(n):
+        bl = (slab_marker_boxes(blocks[n]) if re.match(r'FL-?\d+_SLAB\d+$', n)
+              else block_text_bboxes(blocks[n]))
+        if not bl: return []
+        if re.match(r'FL-?\d+_BEAMBAR', n) and insert_final.get(n, (0, 0))[0] <= -49: return []
+        dx9, dy9 = _abs9(n)
+        tx9, ty9 = text_local_final.get(n, (0, 0))
+        return [text_bbox(x+dx9+tx9, y+dy9+ty9, w, h, r) for x, y, w, h, r in bl]
+
+    def _mlines9(n):
+        """Γραμμές του δείκτη πλάκας: το κυκλάκι ΚΑΙ το «μουστάκι» (η γραμμή
+        οδηγός). Ήταν εντελώς αόρατα στη βαθμολόγηση - γι' αυτό μια ετικέτα
+        «λυνόταν» και κατέληγε πάνω στη γραμμή του κυκλακιού."""
+        if not re.match(r'FL-?\d+_SLAB\d+$', n):
+            return []
+        dx9, dy9 = _abs9(n)
+        ln9, _ = block_lines_local(blocks[n])
+        return [(a+dx9, b+dy9, c+dx9, d+dy9) for a, b, c, d in ln9]
+
+    def _rlines9(n):
+        if not re.match(r'FL-?\d+_(SLABBAR|BEAMBAR)\d+$', n): return []
+        if re.match(r'FL-?\d+_BEAMBAR', n) and insert_final.get(n, (0, 0))[0] <= -49: return []
+        dx9, dy9 = _abs9(n)
+        ln9, _ = block_lines_local(blocks[n])
+        if n in COLLAPSE_BARS: ln9 = _collapse_lines(ln9)
+        if n in P2_REPLACE: ln9 = [P2_REPLACE[n]]
+        return [(a+dx9, b+dy9, c+dx9, d+dy9) for a, b, c, d in ln9]
+
+    _TEXTNAMES9 = [n for n in blocks
+                   if re.match(r'FL-?\d+_(BEAMBAR|SLABBAR|BEAM_TEXT|COLUMN_TEXT)\d+$', n)
+                   or re.match(r'FL-?\d+_SLAB\d+$', n)]
+    _BARNAMES9 = [n for n in blocks if re.match(r'FL-?\d+_(SLABBAR|BEAMBAR)\d+$', n)]
+    _MARKNAMES9 = [n for n in blocks if re.match(r'FL-?\d+_SLAB\d+$', n)]
+
+    def _inset9(b):
+        return (b[0]+0.03, b[1]+0.03, b[2]-0.03, b[3]-0.03)
+
+    def _viol9(name):
+        """Παραβιάσεις (κριτήρια audit) που ΕΜΠΛΕΚΟΥΝ το `name`."""
+        v = 0
+        own = _own_struct9(name)
+        mybx = _boxes9(name)
+        # ΒΑΡΥΤΗΤΕΣ (ΚΡΙΣΙΜΟ): το άθροισμα μετρούσε ΟΛΕΣ τις παραβιάσεις ίδια,
+        # οπότε «κερδίζαμε» ένα οριακό κενό και «χάναμε» μια ΑΔΙΑΒΑΣΤΗ ετικέτα -
+        # και ο αλγόριθμος απέρριπτε σωστές κινήσεις. Ό,τι κάνει το κείμενο
+        # ΑΔΙΑΒΑΣΤΟ βαραίνει ασύγκριτα περισσότερο από ένα αισθητικό κενό.
+        # ΜΕΤΡΗΜΕΝΟ ΑΠΟΤΕΛΕΣΜΑ ΤΩΝ ΒΑΡΩΝ (karaisk, AUDIT παλιό scope):
+        #   χωρίς βάρη (όλα 1.0) ....... 29  <-- ΚΑΛΥΤΕΡΟ
+        #   βάρη 10/8/4/1 .............. 31
+        #   βάρη 100/8/4/1 ............. 35
+        # Τα βάρη ΧΕΙΡΟΤΕΡΕΨΑΝ το σύνολο: κυνηγώντας τις επικαλύψεις ο
+        # αλγόριθμος αντάλλασσε πολλές τομές γραμμής για μία επικάλυψη.
+        # Μένουν ουδέτερα (1.0) μέχρι να υπάρξει καλύτερο μοντέλο κόστους.
+        W_OVERLAP = 1.0
+        W_CUT     = 1.0
+        W_CIRCLE  = 1.0
+        W_GAP     = 1.0
+        # (α) το κείμενό μου κομμένο από ΞΕΝΗ γραμμή οπλισμού  [Θ / ΙΔ]
+        for b in mybx:
+            ib = _inset9(b)
+            if ib[0] >= ib[2] or ib[1] >= ib[3]: continue
+            for on in _BARNAMES9:
+                if on == name: continue
+                if any(seg_intersects_bbox(s, ib) for s in _rlines9(on)):
+                    v += W_CUT; break
+        # (β) το κείμενό μου κομμένο από ΔΟΜΙΚΗ γραμμή  [ΙΒ / ΙΕ]
+        for b in mybx:
+            ib = _inset9(b)
+            if ib[0] >= ib[2] or ib[1] >= ib[3]: continue
+            if any(seg_intersects_bbox(s[:4], ib) for s in _STRUCT9 if s[4] not in own):
+                v += W_CUT; break
+        # (γ) η ΔΙΚΗ μου γραμμή οπλισμού κόβει ΞΕΝΟ κείμενο  [Θ / ΙΔ]
+        mylines = _rlines9(name)
+        if mylines:
+            for on in _TEXTNAMES9:
+                if on == name: continue
+                hit = False
+                for b in _boxes9(on):
+                    ib = _inset9(b)
+                    if ib[0] >= ib[2] or ib[1] >= ib[3]: continue
+                    if any(seg_intersects_bbox(s, ib) for s in mylines):
+                        hit = True; break
+                if hit: v += W_CUT
+        # (δ) επικάλυψη κειμένου με ξένο κείμενο  [Α]  ΚΑΙ οριακό κενό <0.03 [Β]
+        for b in mybx:
+            _done = False
+            for on in _TEXTNAMES9:
+                if on == name or _done: continue
+                for ob in _boxes9(on):
+                    if not (b[2] < ob[0] or ob[2] < b[0] or b[3] < ob[1] or ob[3] < b[1]):
+                        v += W_OVERLAP; _done = True; break
+                    gx = max(ob[0]-b[2], b[0]-ob[2], 0.0)
+                    gy = max(ob[1]-b[3], b[1]-ob[3], 0.0)
+                    if math.hypot(gx, gy) < 0.03:
+                        v += W_GAP; _done = True; break
+        # (στ) ΑΝΑΓΝΩΣΙΜΟΤΗΤΑ: το κείμενό μου κομμένο από γραμμή ΔΕΙΚΤΗ ΠΛΑΚΑΣ
+        #      (κυκλάκι ή «μουστάκι») - ο έλεγχος που έλειπε εντελώς.
+        for b in mybx:
+            ib = _inset9(b)
+            if ib[0] >= ib[2] or ib[1] >= ib[3]: continue
+            for sn in _MARKNAMES9:
+                if sn == name: continue
+                if any(seg_intersects_bbox(s, ib) for s in _mlines9(sn)):
+                    v += W_CUT; break
+        # (ζ) οι ΔΙΚΕΣ ΜΟΥ γραμμές δείκτη (αν είμαι δείκτης πλάκας) να μην
+        #     κόβουν ΞΕΝΟ κείμενο - το ίδιο κριτήριο, από την ανάποδη.
+        _myml = _mlines9(name)
+        if _myml:
+            for on in _TEXTNAMES9:
+                if on == name: continue
+                hit = False
+                for b in _boxes9(on):
+                    ib = _inset9(b)
+                    if ib[0] >= ib[2] or ib[1] >= ib[3]: continue
+                    if any(seg_intersects_bbox(s, ib) for s in _myml):
+                        hit = True; break
+                if hit: v += W_CUT
+        # (η) ΠΑΡΑΛΛΗΛΗ ΤΟΜΗ [Δ]: γραμμή σχεδόν παράλληλη στο κείμενο που το
+        #     διασχίζει κατά μήκος - το χειρότερο είδος δυσαναγνωσίας, γιατί
+        #     «σβήνει» ολόκληρη σειρά γραμμάτων. Ίδιο κατώφλι με τον έλεγχο.
+        _bl_loc = (slab_marker_boxes(blocks[name]) if re.match(r'FL-?\d+_SLAB\d+$', name)
+                   else block_text_bboxes(blocks[name]))
+        if _bl_loc:
+            _adx9, _ady9 = _abs9(name)
+            _tdx9, _tdy9 = text_local_final.get(name, (0, 0))
+            _obs9 = [(s[0], s[1], s[2], s[3], s[4]) for s in _STRUCT9 if s[4] not in own]
+            for _on9 in _BARNAMES9:
+                if _on9 == name: continue
+                _obs9 += [(s[0], s[1], s[2], s[3], _on9) for s in _rlines9(_on9)]
+            if parallel_cut_full(_bl_loc, _adx9+_tdx9, _ady9+_tdy9, _obs9, (name,)):
+                v += 1
+        # (θ) Η ΔΙΚΗ ΜΟΥ γραμμή μέσα στη ΔΙΚΗ ΜΟΥ ετικέτα [Ζ]: η ράβδος πρέπει
+        #     να ακουμπά την ετικέτα της, ΟΧΙ να την διαπερνά.
+        if mylines:
+            for b in mybx:
+                ib = _inset9(b)
+                if ib[0] < ib[2] and ib[1] < ib[3] and any(seg_intersects_bbox(s, ib) for s in mylines):
+                    v += 1; break
+        # (ι) ΕΚΤΟΣ ΖΩΝΗΣ ΠΛΑΚΑΣ [Ε]: η ετικέτα ράβδου πλάκας οφείλει να μένει
+        #     μέσα στην πλάκα της. Μπαίνει στη ΒΑΘΜΟΛΟΓΙΑ (όχι μόνο ως φίλτρο
+        #     υποψηφίων) ώστε ο βελτιστοποιητής να ΕΠΙΔΙΩΚΕΙ ενεργά να
+        #     επαναφέρει όποια ετικέτα βρεθεί εκτός.
+        if re.match(r'FL-?\d+_SLABBAR\d+$', name):
+            _hb9 = SLABBAR_HOME_SLAB.get(name)
+            if _hb9 and mybx:
+                _ub9 = (min(b[0] for b in mybx), min(b[1] for b in mybx),
+                        max(b[2] for b in mybx), max(b[3] for b in mybx))
+                _mcx, _mcy = (_ub9[0]+_ub9[2])/2, (_ub9[1]+_ub9[3])/2
+                if not (_hb9[0]-0.05 <= _mcx <= _hb9[2]+0.05 and
+                        _hb9[1]-0.05 <= _mcy <= _hb9[3]+0.05):
+                    v += 1
+        # (ε) κείμενο πάνω σε κυκλάκι δείκτη πλάκας  [Γ]
+        try:
+            _cbs = _circle_boxes()
+        except Exception:
+            _cbs = []
+        for b in mybx:
+            for _cb, _csn in _cbs:
+                if _csn == name: continue
+                if not (b[2] < _cb[0] or _cb[2] < b[0] or b[3] < _cb[1] or _cb[3] < b[1]):
+                    v += W_CIRCLE; break
+        return v
+
+    def _neighbours9(name):
+        """Στοιχεία που μπορεί να επηρεαστούν από κίνηση του `name` (για ακριβές
+        δέλτα: μετράμε ΚΑΙ τις δικές τους παραβιάσεις πριν/μετά)."""
+        out = {name}
+        mybx = _boxes9(name) + [(_b[0], _b[1], _b[2], _b[3]) for _b in _boxes9(name)]
+        myl = _rlines9(name)
+        if not mybx and not myl: return out
+        xs = [p for b in _boxes9(name) for p in (b[0], b[2])] + [p for s in myl for p in (s[0], s[2])]
+        ys = [p for b in _boxes9(name) for p in (b[1], b[3])] + [p for s in myl for p in (s[1], s[3])]
+        if not xs: return out
+        R = 6.0
+        x1, x2, y1, y2 = min(xs)-R, max(xs)+R, min(ys)-R, max(ys)+R
+        for on in _TEXTNAMES9:
+            if on == name: continue
+            for b in _boxes9(on):
+                if not (b[2] < x1 or b[0] > x2 or b[3] < y1 or b[1] > y2):
+                    out.add(on); break
+        return out
+
+    def _ovl9(name):
+        """Πόσες ΕΠΙΚΑΛΥΨΕΙΣ ΚΕΙΜΕΝΟΥ-ΜΕ-ΚΕΙΜΕΝΟ εμπλέκουν το `name`.
+        Είναι η ΧΕΙΡΟΤΕΡΗ μορφή δυσαναγνωσίας: δύο κείμενα το ένα πάνω στο
+        άλλο δεν διαβάζονται καθόλου, ενώ μια λεπτή γραμμή που περνά από τα
+        γράμματα είναι ενοχλητική αλλά αναγνώσιμη."""
+        c = 0
+        for b in _boxes9(name):
+            for on in _TEXTNAMES9:
+                if on == name: continue
+                for ob in _boxes9(on):
+                    if not (b[2] < ob[0] or ob[2] < b[0] or b[3] < ob[1] or ob[3] < b[1]):
+                        c += 1; break
+                else:
+                    continue
+                break
+        return c
+
+    def _score9(names):
+        # ΛΕΞΙΚΟΓΡΑΦΙΚΟ ΣΚΟΡ. Με σκέτο άθροισμα, κινήσεις που ΑΝΤΑΛΛΑΣΣΟΥΝ μια
+        # επικάλυψη κειμένου με μια γραμμή-στα-γράμματα έβγαιναν ΙΣΟΠΑΛΕΣ και
+        # απορρίπτονταν από το «αυστηρά καλύτερο». Μετρήθηκε στο SLABBAR27:
+        # στη θέση 0.00 -> {γ:4, δ:1}, στη θέση -0.90 -> {α:1, γ:4}, σύνολο
+        # 28 = 28, άρα ΚΑΜΙΑ κίνηση δεν γινόταν ποτέ δεκτή. Με δεύτερο
+        # κριτήριο τις επικαλύψεις κειμένου, η ισοπαλία σπάει υπέρ της
+        # αναγνωσιμότητας.
+        return (sum(_viol9(n) for n in names), sum(_ovl9(n) for n in names))
+
+    def _candidates9(name):
+        """Υποψήφιες θέσεις: φυσική (0,0), τωρινή, και μετατοπίσεις κάθετα/κατά
+        μήκος. Κάθε υποψήφια σέβεται τους ΑΠΑΡΑΒΑΤΟΥΣ κανόνες (όρια πλάκας,
+        πλευρά δοκού) - η βελτιστοποίηση ΔΕΝ χαλαρώνει κανέναν κανόνα."""
+        cur_i = insert_final.get(name, (0.0, 0.0))
+        cur_t = text_local_final.get(name, (0.0, 0.0))
+        cands = [(cur_i, cur_t)]
+        if re.match(r'FL-?\d+_BEAMBAR', name) and cur_i[0] <= -49:
+            return cands
+        lines, _ = block_lines_local(blocks[name])
+        _isslabbar = bool(re.match(r'FL-?\d+_SLABBAR\d+$', name)) and bool(lines)
+        _isbeambar = bool(re.match(r'FL-?\d+_BEAMBAR\d+$', name)) and bool(lines)
+        _ismarker = bool(re.match(r'FL-?\d+_SLAB\d+$', name))
+        if not _ismarker:
+            cands.append(((0.0, 0.0), (0.0, 0.0)))
+        if _isbeambar:
+            # ΚΛΕΙΔΩΜΕΝΟΣ ΟΠΛΙΣΜΟΣ ΔΟΚΟΥ: η ράβδος ΔΕΝ μετακινείται. Επιτρέπεται
+            # ΜΟΝΟ ολίσθηση της ετικέτας ΚΑΤΑ ΜΗΚΟΣ της δικής της ράβδου - το
+            # 2ο εργαλείο, με τους κανόνες που διέπουν τον οπλισμό δοκού.
+            (bux, buy), (blo, bhi) = spine_and_bounds(lines)
+            for t9 in [0.10*k for k in range(1, 21)]:
+                for sg in (1, -1):
+                    cands.append((cur_i, (cur_t[0]+bux*t9*sg, cur_t[1]+buy*t9*sg)))
+            return cands
+        if _ismarker:
+            # ΔΕΙΚΤΗΣ ΠΛΑΚΑΣ (κυκλάκι + μουστάκι): μικρές μετατοπίσεις, ώστε να
+            # φύγει η γραμμή του από πάνω από ετικέτες. Πάντα μέσω _marker_move_ok.
+            for s in (0.05, 0.08, 0.12, 0.18, 0.25, 0.35, 0.50):
+                for dxs, dys in ((s,0),(-s,0),(0,s),(0,-s),(s,s),(-s,-s),(s,-s),(-s,s)):
+                    ndx, ndy = cur_i[0]+dxs, cur_i[1]+dys
+                    try:
+                        if not _marker_move_ok(name, ndx, ndy):
+                            continue
+                    except Exception:
+                        pass
+                    cands.append(((ndx, ndy), cur_t))
+            return cands
+        if _isslabbar:
+            (ux, uy), (lo, hi) = spine_and_bounds(lines)
+            nx9, ny9 = -uy, ux
+            for s in (0.05, 0.10, 0.15, 0.20, 0.30, 0.45, 0.60, 0.90,
+                       1.20, 1.60, 2.10, 2.70, 3.40, 4.20):
+                for sg in (1, -1):
+                    ndx, ndy = cur_i[0]+nx9*s*sg, cur_i[1]+ny9*s*sg
+                    if _bar_move_ok(name, lines, ndx, ndy) and _overhang_ok(name, lines, ndx, ndy):
+                        cands.append(((ndx, ndy), cur_t))
+            # ΠΥΚΝΟ ΠΛΕΓΜΑ ΟΛΙΣΘΗΣΗΣ (0.05μ): το αραιό πλέγμα έχανε λύσεις που
+            # υπήρχαν ΑΝΑΜΕΣΑ στα βήματα - μετρήθηκε στο SLABBAR27, όπου η
+            # καθαρή θέση ήταν στα -0.90μ και ΔΕΝ δοκιμαζόταν ποτέ. ΠΡΟΣΟΧΗ:
+            # μετρήθηκε ότι το πολύ πυκνό πλέγμα ΧΕΙΡΟΤΕΡΕΥΕ το σύνολο
+            # (28->31), γιατί η άπληστη σειρά επιλογής κλειδώνει νωρίς σε
+            # τοπικά καλές αλλά συνολικά κακές θέσεις. Μέτριο πλέγμα 0.10μ.
+            # Η ΟΛΙΣΘΗΣΗ ΕΤΙΚΕΤΑΣ πρέπει να σέβεται ΤΑ ΙΔΙΑ όρια πλάκας με τη
+            # μετακίνηση ράβδου. Χωρίς αυτόν τον έλεγχο η ετικέτα ολισθούσε
+            # κατά μήκος της ράβδου και ΕΒΓΑΙΝΕ ΑΠΟ ΤΗΝ ΠΛΑΚΑ ΤΗΣ - φαινόταν
+            # να «ανήκει» σε γειτονική πλάκα, που είναι λάθος ανάγνωση.
+            _hb = SLABBAR_HOME_SLAB.get(name)
+            _lb0 = block_text_bboxes(blocks[name])
+            for t in [0.10*k for k in range(1, 26)]:
+                for sg in (1, -1):
+                    _nt = (cur_t[0]+ux*t*sg, cur_t[1]+uy*t*sg)
+                    if _hb and _lb0:
+                        _adx, _ady = _abs9(name)
+                        _u0 = union_bbox([(x+_adx+_nt[0], y+_ady+_nt[1], w, h, r)
+                                           for x, y, w, h, r in _lb0])
+                        _lcx, _lcy = (_u0[0]+_u0[2])/2, (_u0[1]+_u0[3])/2
+                        if not (_hb[0]-0.05 <= _lcx <= _hb[2]+0.05 and
+                                _hb[1]-0.05 <= _lcy <= _hb[3]+0.05):
+                            continue
+                    cands.append((cur_i, _nt))
+            # ΚΑΘΟΛΙΚΟ ΦΙΛΤΡΟ: ο παραπάνω έλεγχος κάλυπτε ΜΟΝΟ τις ολισθήσεις.
+            # Όμως και η ΜΕΤΑΚΙΝΗΣΗ ΤΗΣ ΡΑΒΔΟΥ σέρνει την ετικέτα μαζί της, και
+            # το _bar_move_ok ελέγχει τα άκρα της ΡΑΒΔΟΥ - όχι τη θέση της
+            # ΕΤΙΚΕΤΑΣ. Έτσι 4 ετικέτες (SLABBAR17/20/22/27) κατέληξαν έως και
+            # 1.13μ ΕΞΩ από την πλάκα τους. Εδώ ΚΑΘΕ υποψήφια (ολίσθηση Ή
+            # μετακίνηση ράβδου) περνά τον ίδιο έλεγχο.
+            if _hb and _lb0:
+                _nx0, _ny0 = ins.get(name, (0.0, 0.0))
+                _ok9 = []
+                for _c9, _t9 in cands:
+                    _uu = union_bbox([(x+_c9[0]+_nx0+_t9[0], y+_c9[1]+_ny0+_t9[1], w, h, r)
+                                       for x, y, w, h, r in _lb0])
+                    _cx9, _cy9 = (_uu[0]+_uu[2])/2, (_uu[1]+_uu[3])/2
+                    if (_hb[0]-0.05 <= _cx9 <= _hb[2]+0.05 and
+                            _hb[1]-0.05 <= _cy9 <= _hb[3]+0.05):
+                        _ok9.append((_c9, _t9))
+                if _ok9:
+                    cands = _ok9
+        elif re.match(r'FL-?\d+_BEAM_TEXT\d+$', name):
+            # ΑΠΑΡΑΒΑΤΟ: το κείμενο δοκού ολισθαίνει ΜΟΝΟ κατά μήκος του άξονα
+            # της δοκού του - ποτέ κάθετα (αλλιώς βγαίνει από τη δοκό, [Η]).
+            m9 = re.match(r'(FL-?\d+_)BEAM_TEXT(\d+)$', name)
+            bn9 = m9.group(1)+'BEAM'+m9.group(2)
+            axis = None
+            if bn9 in blocks:
+                bl9, _ = block_lines_local(blocks[bn9])
+                if bl9:
+                    (aux9, auy9), _ = spine_and_bounds(bl9)
+                    axis = (aux9, auy9)
+            if axis:
+                for s in (0.05, 0.10, 0.18, 0.28, 0.40, 0.60):
+                    for sg in (1, -1):
+                        cands.append(((cur_i[0]+axis[0]*s*sg, cur_i[1]+axis[1]*s*sg), cur_t))
+        else:
+            for s in (0.05, 0.10, 0.15, 0.22, 0.30, 0.45):
+                for dxs, dys in ((s, 0), (-s, 0), (0, s), (0, -s), (s, s), (-s, -s), (s, -s), (-s, s)):
+                    cands.append(((cur_i[0]+dxs, cur_i[1]+dys), cur_t))
+        return cands
+
+    # ΦΑΣΗ 1 (εντολή μηχανικού): ΚΛΕΙΔΩΜΕΝΑ κολώνες, κείμενα δοκών και οπλισμοί
+    # δοκών - η τακτοποίησή τους θεωρείται ήδη σωστή και ΔΕΝ ξαναγγίζεται.
+    # Η επαναληπτική βελτιστοποίηση μετακινεί ΜΟΝΟ οπλισμούς ΠΛΑΚΩΝ (SLABBAR):
+    # ολόκληρη ράβδος άκαμπτα ή ολίσθηση της ετικέτας κατά μήκος της ράβδου της.
+    # Ο ΕΛΕΓΧΟΣ όμως παραμένει ΚΑΘΟΛΙΚΟΣ: κάθε υποψήφια κίνηση βαθμολογείται με
+    # τις παραβιάσεις ΟΛΩΝ των γειτόνων (και των κλειδωμένων), ώστε μια ράβδος
+    # πλάκας να μην «λύνει» το δικό της πρόβλημα χαλώντας ένα κείμενο δοκού.
+    # ΜΑΖΙΚΗ ΕΠΕΞΕΡΓΑΣΙΑ - ΟΧΙ έναν-έναν: μπαίνουν ΟΛΑ όσα επιτρέπεται να
+    # κινηθούν. SLABBAR (μετακίνηση ράβδου εντός πλάκας + ολίσθηση ετικέτας),
+    # δείκτες πλάκας (μετακίνηση κυκλακιού ώστε να φύγει το «μουστάκι» από
+    # πάνω από κείμενα) και ετικέτες οπλισμού δοκών (ΜΟΝΟ ολίσθηση κατά μήκος
+    # της ράβδου τους). Κολώνες και κείμενα δοκών παραμένουν κλειδωμένα.
+    # Προστίθεται και το BEAM_TEXT - ΜΟΝΟ με ολίσθηση ΚΑΤΑ ΜΗΚΟΣ της δοκού του
+    # (ποτέ κάθετα, §κανόνας δοκών). Μετρήθηκε ότι οι εναπομείνασες συγκρούσεις
+    # SLABBAR27/29 έχουν ΜΠΛΟΚΑΡΙΣΤΗ το BEAM_TEXT18: όσο αυτό ήταν κλειδωμένο,
+    # καμία ταυτόχρονη μετακίνηση δεν είχε νόημα (κέρδος 0).
+    # ΜΕΤΡΗΜΕΝΟ: το ξεκλείδωμα του BEAM_TEXT (έστω μόνο για ολίσθηση κατά μήκος)
+    # ΧΕΙΡΟΤΕΡΕΥΣΕ το σύνολο, 29 -> 35. Μένει κλειδωμένο.
+    # ΜΕΤΡΗΜΕΝΟ: ξεκλείδωμα BEAM_TEXT (έστω μόνο ολίσθηση κατά μήκος)
+    # χειροτέρευσε το σύνολο 29 -> 35. Μένει κλειδωμένο.
+    # BEAM_TEXT: μπαίνει ΚΙ ΑΥΤΟ, αλλά με ΜΟΝΑΔΙΚΟ εργαλείο την ολίσθηση ΚΑΤΑ
+    # ΜΗΚΟΣ της δοκού του (βλ. _candidates9) - ποτέ κάθετα, άρα δεν βγαίνει
+    # από τη δοκό του. Χωρίς αυτό, τα SLABBAR27/29 ήταν ΑΛΥΤΑ: ο αντίπαλός
+    # τους είναι το BEAM_TEXT18 και, όσο ήταν κλειδωμένο, καμία ταυτόχρονη
+    # κίνηση ζεύγους δεν μπορούσε καν να προταθεί (μετρήθηκε: 0 ζεύγη).
+    # ΔΟΚΙΜΑΣΤΗΚΕ και το ξεκλείδωμα των BEAM_TEXT (ολίσθηση κατά μήκος δοκού)
+    # ώστε να υπάρχει αντίπαλος για ταυτόχρονη κίνηση με τα SLABBAR27/29.
+    # ΜΕΤΡΗΘΗΚΕ ΧΕΙΡΟΤΕΡΟ: 29 -> 35 παραβιάσεις, και τα ζεύγη έμειναν 0.
+    # Παραμένουν κλειδωμένα.
+    _MOVABLE9 = [n for n in _TEXTNAMES9
+                 if re.match(r'FL-?\d+_(SLABBAR\d+|SLAB\d+|BEAMBAR\d+)$', n)]
+    # ΓΙΑΤΙ ΔΕΝ ΜΕΤΑΚΙΝΟΥΝΤΑΝ ΟΙ ΟΠΛΙΣΜΟΙ ΠΛΑΚΩΝ: όποια ράβδος δεν έχει
+    # καταχωρημένη πλάκα στο SLABBAR_HOME_SLAB δεχόταν ΜΟΝΟ μηδενική μετατόπιση
+    # (`return abs(ndx)<1e-9 and abs(ndy)<1e-9`) - ήταν κυριολεκτικά καρφωμένη,
+    # όσο κι αν βελτιωνόταν το σχέδιο μετακινώντας την. Τα slab_poly του FESPA
+    # είναι ελλιπή (μόνο ελεύθερες ακμές), οπότε αυτό συνέβαινε σε πολλές.
+    # Λύση με ΤΟΝ ΙΔΙΟ ΚΡΙΤΗ που χρησιμοποιεί ο έλεγχος: flood-fill περιοχή
+    # (slab_region.py). Εφαρμόζεται ΜΟΝΟ στις ράβδους χωρίς κανένα όριο - οι
+    # ήδη γνωστές δεν πειράζονται καθόλου (εκεί η προηγούμενη, καθολική
+    # εκδοχή είχε χαλάσει το karaisk).
+    # ΟΡΙΣΜΟΣ ΜΗΧΑΝΙΚΟΥ: η πλάκα κάθε SLABBAR = το κλειστό πολύγωνο που
+    # περιβάλλει την ΕΤΙΚΕΤΑ του, υπολογισμένο ΜΟΝΟ στο αρχείο-μήτρα (εδώ:
+    # `input_path`, πριν από οποιαδήποτε μετατόπιση). Σε επόμενα αρχεία η
+    # ετικέτα μπορεί να έχει ολισθήσει σε ΔΙΠΛΑΝΗ πλάκα, οπότε ο ίδιος
+    # υπολογισμός θα «νομιμοποιούσε» λάθος όρια. Τα όρια αυτού του πολυγώνου
+    # ΕΙΝΑΙ τα όρια μετακίνησης της ράβδου.
+    try:
+        from slab_region import region_around_point as _rap8
+    except Exception:
+        _rap8 = None
+    _defined8 = 0
+    if _rap8 is not None:
+        _SBONLY8 = [n for n in _MOVABLE9 if re.match(r'FL-?\d+_SLABBAR\d+$', n)]
+        for _bn8 in _SBONLY8:
+            _bl8, _ = block_lines_local(blocks[_bn8])
+            _lb8 = block_text_bboxes(blocks[_bn8])
+            if not _bl8 or not _lb8:
+                continue
+            _ox8, _oy8 = ins.get(_bn8, (0, 0))
+            _u8 = union_bbox(_lb8)
+            _xs8 = [p for s_ in _bl8 for p in (s_[0], s_[2])]
+            _ys8 = [p for s_ in _bl8 for p in (s_[1], s_[3])]
+            # ΠΟΛΛΑΠΛΟΙ ΣΠΟΡΟΙ: ο σπόρος της ετικέτας μπορεί να πέσει μέσα σε
+            # ΛΩΡΙΔΑ ΔΟΚΟΥ και το γέμισμα να εγκλωβιστεί σε μικρό θύλακο -
+            # μετρήθηκε ράβδος 2.41μ να παίρνει «πλάκα» 1.30μ, δηλαδή κουτί
+            # μικρότερο από την ίδια τη ράβδο, που την ΚΑΡΦΩΝΕ αντί να την
+            # ελευθερώσει. Δοκιμάζονται σπόροι και ΚΑΤΑ ΜΗΚΟΣ της ράβδου και
+            # κρατιέται η ΜΕΓΑΛΥΤΕΡΗ περιοχή: αυτή είναι το πραγματικό
+            # πολύγωνο της πλάκας μέσα στο οποίο η ράβδος κινείται ελεύθερα.
+            _seeds8 = [((_u8[0]+_u8[2])/2+_ox8, (_u8[1]+_u8[3])/2+_oy8)]
+            # ΜΟΝΟ Ο ΣΠΟΡΟΣ ΤΗΣ ΕΤΙΚΕΤΑΣ. Οι σπόροι κατά μήκος της ράβδου
+            # αφαιρέθηκαν: αποδείχτηκε (SLABBAR23) ότι έδιναν τη ΓΕΙΤΟΝΙΚΗ
+            # πλάκα SLAB9 αντί της σωστής SLAB4. Μια μακριά ράβδος περνά
+            # φυσιολογικά πάνω από πολλές πλάκες - αυτό που ορίζει την ΔΙΚΗ
+            # της πλάκα είναι η ετικέτα της, και μόνο αυτή.
+            for _f8 in ():
+                _seeds8.append((min(_xs8)+_f8*(max(_xs8)-min(_xs8))+_ox8,
+                                 min(_ys8)+_f8*(max(_ys8)-min(_ys8))+_oy8))
+            # ΑΠΑΡΑΒΑΤΟΣ ΟΡΙΣΜΟΣ: η πλάκα είναι το πολύγωνο που ΠΕΡΙΒΑΛΛΕΙ ΤΗΝ
+            # ΕΤΙΚΕΤΑ. Οι επιπλέον σπόροι κατά μήκος της ράβδου χρησιμεύουν
+            # ΜΟΝΟ ως διάσωση όταν ο σπόρος της ετικέτας εγκλωβιστεί σε λωρίδα
+            # δοκού - και γίνονται δεκτοί ΜΟΝΟ αν η περιοχή τους περιέχει κι
+            # αυτή την ετικέτα. Χωρίς αυτόν τον έλεγχο, ένας σπόρος στην άκρη
+            # της ράβδου έδινε τη ΔΙΠΛΑΝΗ πλάκα (μεγαλύτερη σε εμβαδόν) και η
+            # ράβδος «μετανάστευε» σε λάθος πλάκα - μετρήθηκε στο SLABBAR23,
+            # που πήγε στην SLAB3 ενώ ανήκει στην SLAB4.
+            _lp8 = ((_u8[0]+_u8[2])/2+_ox8, (_u8[1]+_u8[3])/2+_oy8)
+            _reg8 = None
+            for _sx8, _sy8 in _seeds8:
+                _r8 = _rap8(input_path, _sx8, _sy8)
+                if not _r8:
+                    continue
+                if not (_r8[0] <= _lp8[0] <= _r8[2] and _r8[1] <= _lp8[1] <= _r8[3]):
+                    continue
+                if _reg8 is None or ((_r8[2]-_r8[0])*(_r8[3]-_r8[1]) >
+                                      (_reg8[2]-_reg8[0])*(_reg8[3]-_reg8[1])):
+                    _reg8 = _r8
+            if not _reg8:
+                continue
+            # ένωση με τη ΦΥΣΙΚΗ έκταση: η θέση του μηχανικού είναι εξ ορισμού
+            # νόμιμη, ακόμη κι αν η ράβδος προεξέχει ελαφρώς του πολυγώνου.
+            # ΑΠΟΛΥΤΕΣ συντεταγμένες και για τη φυσική έκταση της ράβδου
+            _axs8 = [p+_ox8 for p in _xs8]; _ays8 = [p+_oy8 for p in _ys8]
+            SLABBAR_HOME_SLAB[_bn8] = (min(_reg8[0], min(_axs8)), min(_reg8[1], min(_ays8)),
+                                        max(_reg8[2], max(_axs8)), max(_reg8[3], max(_ays8)))
+            _defined8 += 1
+    SLAB_REGIONS_ALL[:] = [v for v in SLABBAR_HOME_SLAB.values() if v]
+    print(f'ΟΡΙΑ ΠΛΑΚΑΣ ΑΠΟ ΕΤΙΚΕΤΑ (αρχείο-μήτρα): {_defined8}/{len(_SBONLY8)} ράβδοι')
+
+    # ========================================================================
+    # ΚΑΝΟΝΑΣ ΠΡΟΕΞΟΧΗΣ (εντολή μηχανικού): μια ράβδος ΜΠΟΡΕΙ να προεξέχει από
+    # την πλάκα της (συνεχής ράβδος / οπλισμός προβόλου). ΑΛΛΑ το τμήμα που
+    # προεξέχει πρέπει να πέφτει ΠΑΝΩ ΣΕ ΠΛΑΚΑ - ποτέ στο κενό. Χωρίς αυτό, η
+    # εγκάρσια ελευθερία που μόλις δόθηκε θα έσπρωχνε ράβδους έξω από το κτίριο.
+    try:
+        from slab_region import all_slab_regions as _asr7
+        _ALLREG7 = list(_asr7(input_path).values())
+    except Exception:
+        _ALLREG7 = []
+
+    def _overhang_ok(name, lines, ndx, ndy):
+        if not _ALLREG7 or not re.match(r'FL-?\d+_SLABBAR\d+$', name):
+            return True
+        home = SLABBAR_HOME_SLAB.get(name)
+        pts = []
+        for x1, y1, x2, y2 in lines:
+            for k in range(5):
+                f = k/4.0
+                pts.append((x1+(x2-x1)*f+ndx, y1+(y2-y1)*f+ndy))
+        for px, py in pts:
+            if home and (home[0]-0.02 <= px <= home[2]+0.02 and
+                          home[1]-0.02 <= py <= home[3]+0.02):
+                continue          # μέσα στη δική του πλάκα - εντάξει
+            inside_any = False
+            for r7 in _ALLREG7:
+                if r7[0]-0.05 <= px <= r7[2]+0.05 and r7[1]-0.05 <= py <= r7[3]+0.05:
+                    inside_any = True
+                    break
+            if not inside_any:
+                return False      # προεξοχή στο ΚΕΝΟ - απαγορεύεται
+        return True
+
+    # ΔΥΝΑΜΙΚΗ ΟΥΡΑ ΑΝΤΙ ΓΙΑ ΣΤΑΘΕΡΗ ΛΙΣΤΑ
+    # ------------------------------------------------------------------
+    # ΤΟ ΛΑΘΟΣ ΠΟΥ ΔΙΟΡΘΩΝΕΤΑΙ: η σειρά εξέτασης υπολογιζόταν ΜΙΑ ΦΟΡΑ στην
+    # αρχή κάθε γύρου (`_order9 = sorted(...)`) και όποιο στοιχείο είχε τότε
+    # μηδέν παραβιάσεις προσπερνιόταν ΟΡΙΣΤΙΚΑ για όλο τον γύρο. Όταν όμως η
+    # μετακίνηση ενός στοιχείου ΔΗΜΙΟΥΡΓΟΥΣΕ νέα παράβαση σε γείτονα που είχε
+    # ήδη προσπεραστεί, κανείς δεν την ξανακοίταζε. Αποδείχτηκε με μετρητή
+    # μέσα στον βρόχο: το SLABBAR27 ΔΕΝ ΕΞΕΤΑΣΤΗΚΕ ΠΟΤΕ, ενώ στην τελική
+    # εικόνα είχε καθαρή επικάλυψη με το BEAM_TEXT18.
+    # ΛΥΣΗ: ουρά εργασίας. Μετά από ΚΑΘΕ αποδεκτή κίνηση, ΟΛΟΙ οι γείτονες
+    # ξαναμπαίνουν στην ουρά, ώστε κάθε παράβαση που γεννιέται να ελέγχεται.
+    from collections import deque as _deque9
+    _opt_total_gain = 0
+    _round_gain = 0
+    _queue9 = _deque9(sorted(_MOVABLE9, key=lambda n: -_viol9(n)))
+    _inq9 = set(_queue9)
+    _steps9 = 0
+    if True:
+        while _queue9 and _steps9 < 6000:
+            _steps9 += 1
+            name = _queue9.popleft()
+            _inq9.discard(name)
+            if _viol9(name) == 0:
+                continue
+            nb = _neighbours9(name)
+            base = _score9(nb)
+            if base[0] == 0 and base[1] == 0:
+                continue
+            sv_i = insert_final.get(name, None)
+            sv_t = text_local_final.get(name, None)
+            best = None
+            for ci, ct in _candidates9(name):
+                insert_final[name] = ci
+                if abs(ct[0]) > 1e-9 or abs(ct[1]) > 1e-9:
+                    text_local_final[name] = ct
+                elif name in text_local_final:
+                    del text_local_final[name]
+                sc = _score9(nb)
+                if sc < base and (best is None or sc < best[0]):
+                    best = (sc, ci, ct)
+            if best is not None:
+                insert_final[name] = best[1]
+                if abs(best[2][0]) > 1e-9 or abs(best[2][1]) > 1e-9:
+                    text_local_final[name] = best[2]
+                elif name in text_local_final:
+                    del text_local_final[name]
+                _round_gain += (base[0] - best[0][0]) + (base[1] - best[0][1])
+                # ΞΑΝΑ ΣΤΗΝ ΟΥΡΑ όλοι οι γείτονες: η κίνηση μπορεί να άνοιξε
+                # παράβαση σε στοιχείο που είχε ήδη ελεγχθεί.
+                for _nn9 in nb:
+                    if _nn9 in _MOVABLE9 and _nn9 not in _inq9:
+                        _inq9.add(_nn9)
+                        _queue9.append(_nn9)
+            else:
+                if sv_i is None:
+                    insert_final.pop(name, None)
+                else:
+                    insert_final[name] = sv_i
+                if sv_t is None:
+                    text_local_final.pop(name, None)
+                else:
+                    text_local_final[name] = sv_t
+        _opt_total_gain = _round_gain
+    # ========================================================================
+    # ΤΑΥΤΟΧΡΟΝΗ ΜΕΤΑΚΙΝΗΣΗ 2-3 ΣΤΟΙΧΕΙΩΝ (έξοδος από το τοπικό ελάχιστο)
+    # ------------------------------------------------------------------------
+    # Ο άπληστος βρόχος κινεί ΕΝΑ στοιχείο τη φορά και δέχεται μόνο αυστηρή
+    # βελτίωση. Έτσι κολλάει: η ετικέτα Α δεν μπορεί να φύγει επειδή όπου κι αν
+    # πάει σκοντάφτει στο Β, και το Β δεν κουνιέται επειδή μόνο του δεν κερδίζει
+    # τίποτα. Η λύση απαιτεί να ΜΕΤΑΚΙΝΗΘΟΥΝ ΜΑΖΙ. Εδώ, για κάθε στοιχείο που
+    # παραμένει σε παράβαση, δοκιμάζεται κάθε θέση του ΚΑΙ ταυτόχρονα
+    # επανατοποθετούνται τα «μπλοκαριστικά» γειτονικά κινητά στοιχεία· η
+    # τριάδα γίνεται δεκτή μόνο αν το ΣΥΝΟΛΟ βελτιώνεται.
+    import time as _tm7
+    _t_start7 = _tm7.time()
+    _PAIR_BUDGET7 = 240.0
+    _pair_gain7 = 0
+    for _pround7 in range(2):
+        if _tm7.time() - _t_start7 > _PAIR_BUDGET7:
+            break
+        for name in sorted(_MOVABLE9, key=lambda n: -_viol9(n)):
+            if _tm7.time() - _t_start7 > _PAIR_BUDGET7:
+                break
+            if _viol9(name) == 0:
+                continue
+            nb = _neighbours9(name)
+            base = _score9(nb)
+            if base == 0:
+                continue
+            # ποια ΚΙΝΗΤΑ στοιχεία με μπλοκάρουν;
+            blockers = []
+            mybx7 = _boxes9(name)
+            for on in nb:
+                if on == name or on not in _MOVABLE9:
+                    continue
+                clash = False
+                for b7 in mybx7:
+                    for ob7 in _boxes9(on):
+                        if not (b7[2] < ob7[0] or ob7[2] < b7[0] or
+                                b7[3] < ob7[1] or ob7[3] < b7[1]):
+                            clash = True; break
+                    if clash: break
+                if not clash:
+                    ib7 = [( _inset9(b7)) for b7 in mybx7]
+                    for s7 in _rlines9(on) + _mlines9(on):
+                        for q7 in ib7:
+                            if q7[0] < q7[2] and q7[1] < q7[3] and seg_intersects_bbox(s7, q7):
+                                clash = True; break
+                        if clash: break
+                if clash:
+                    blockers.append(on)
+            if not blockers:
+                continue
+            blockers = blockers[:3]
+            sv_all = (dict(insert_final), dict(text_local_final))
+            best7 = None
+            _cands_x = _candidates9(name)[:26]
+            for ci, ct in _cands_x:
+                if _tm7.time() - _t_start7 > _PAIR_BUDGET7:
+                    break
+                insert_final.clear(); insert_final.update(sv_all[0])
+                text_local_final.clear(); text_local_final.update(sv_all[1])
+                insert_final[name] = ci
+                if abs(ct[0]) > 1e-9 or abs(ct[1]) > 1e-9:
+                    text_local_final[name] = ct
+                else:
+                    text_local_final.pop(name, None)
+                # ...και ΤΑΥΤΟΧΡΟΝΑ ξαναβρίσκουμε θέση για κάθε μπλοκαριστή
+                for bn7 in blockers:
+                    bnb7 = _neighbours9(bn7)
+                    bbase7 = _score9(bnb7)
+                    bsv7 = (insert_final.get(bn7), text_local_final.get(bn7))
+                    bbest7 = None
+                    for bi7, bt7 in _candidates9(bn7)[:26]:
+                        insert_final[bn7] = bi7
+                        if abs(bt7[0]) > 1e-9 or abs(bt7[1]) > 1e-9:
+                            text_local_final[bn7] = bt7
+                        else:
+                            text_local_final.pop(bn7, None)
+                        sc7 = _score9(bnb7)
+                        if sc7 < bbase7 and (bbest7 is None or sc7 < bbest7[0]):
+                            bbest7 = (sc7, bi7, bt7)
+                    if bbest7 is None:
+                        if bsv7[0] is None: insert_final.pop(bn7, None)
+                        else: insert_final[bn7] = bsv7[0]
+                        if bsv7[1] is None: text_local_final.pop(bn7, None)
+                        else: text_local_final[bn7] = bsv7[1]
+                    else:
+                        insert_final[bn7] = bbest7[1]
+                        if abs(bbest7[2][0]) > 1e-9 or abs(bbest7[2][1]) > 1e-9:
+                            text_local_final[bn7] = bbest7[2]
+                        else:
+                            text_local_final.pop(bn7, None)
+                tot7 = _score9(nb)
+                if tot7 < base and (best7 is None or tot7 < best7[0]):
+                    best7 = (tot7, dict(insert_final), dict(text_local_final))
+            insert_final.clear(); text_local_final.clear()
+            if best7 is not None:
+                insert_final.update(best7[1]); text_local_final.update(best7[2])
+                _pair_gain7 += (base - best7[0])
+            else:
+                insert_final.update(sv_all[0]); text_local_final.update(sv_all[1])
+    print(f'ΤΑΥΤΟΧΡΟΝΕΣ ΜΕΤΑΚΙΝΗΣΕΙΣ (2-3 στοιχεία): -{_pair_gain7} παραβιάσεις')
+
+    # ========================================================================
+    # ΤΑΥΤΟΧΡΟΝΗ ΜΕΤΑΚΙΝΗΣΗ 2 ΣΤΟΙΧΕΙΩΝ - ΕΞΟΔΟΣ ΑΠΟ ΤΟ ΤΟΠΙΚΟ ΕΛΑΧΙΣΤΟ
+    # ------------------------------------------------------------------------
+    # Ο άπληστος βρόχος παραπάνω κινεί ΕΝΑ στοιχείο τη φορά και δέχεται μόνο
+    # αυστηρή βελτίωση. Όταν δύο στοιχεία μπλοκάρουν το ένα το άλλο, ΚΑΜΙΑ
+    # μονή κίνηση δεν βελτιώνει (μετρήθηκε στα SLABBAR27/29: οι κινήσεις ήταν
+    # πλέον νόμιμες αλλά απορρίπτονταν όλες) - λύνεται ΜΟΝΟ αν κινηθούν ΜΑΖΙ.
+    # Εδώ, για κάθε στοιχείο που παραμένει σε παράβαση, εντοπίζεται ο ΑΝΤΙΠΑΛΟΣ
+    # του και δοκιμάζονται ΣΥΝΔΥΑΣΜΟΙ θέσεων των ΔΥΟ ταυτόχρονα.
+    def _partners9(name):
+        out = set()
+        mybx = _boxes9(name); myl = _rlines9(name) + _mlines9(name)
+        for on in _TEXTNAMES9:
+            if on == name: continue
+            obx = _boxes9(on); ol = _rlines9(on) + _mlines9(on)
+            clash = False
+            for b in mybx:
+                ib = _inset9(b)
+                for ob in obx:
+                    if not (b[2] < ob[0] or ob[2] < b[0] or b[3] < ob[1] or ob[3] < b[1]):
+                        clash = True; break
+                if not clash and ib[0] < ib[2] and ib[1] < ib[3]:
+                    if any(seg_intersects_bbox(s, ib) for s in ol):
+                        clash = True
+                if clash: break
+            if not clash:
+                for ob in obx:
+                    oib = _inset9(ob)
+                    if oib[0] < oib[2] and oib[1] < oib[3] and any(seg_intersects_bbox(s, oib) for s in myl):
+                        clash = True; break
+            if clash and on in _MOVABLE9:
+                out.add(on)
+        return out
+
+    _pair_gain = 0
+    for _pair_round in range(2):
+        _rg = 0
+        for name in sorted(_MOVABLE9, key=lambda n: -_viol9(n)):
+            if _viol9(name) == 0:
+                continue
+            for partner in sorted(_partners9(name)):
+                nb = _neighbours9(name) | _neighbours9(partner)
+                base = _score9(nb)
+                if base[0] == 0 and base[1] == 0:
+                    continue
+                sv_i = dict(insert_final); sv_t = dict(text_local_final)
+                ca = _candidates9(name)[:14]
+                cb = _candidates9(partner)[:14]
+                best = None
+                for ia, ta in ca:
+                    for ib2, tb in cb:
+                        insert_final[name] = ia
+                        if abs(ta[0]) > 1e-9 or abs(ta[1]) > 1e-9: text_local_final[name] = ta
+                        else: text_local_final.pop(name, None)
+                        insert_final[partner] = ib2
+                        if abs(tb[0]) > 1e-9 or abs(tb[1]) > 1e-9: text_local_final[partner] = tb
+                        else: text_local_final.pop(partner, None)
+                        sc = _score9(nb)
+                        if sc < base and (best is None or sc < best[0]):
+                            best = (sc, ia, ta, ib2, tb)
+                insert_final.clear(); insert_final.update(sv_i)
+                text_local_final.clear(); text_local_final.update(sv_t)
+                if best is not None:
+                    insert_final[name] = best[1]
+                    if abs(best[2][0]) > 1e-9 or abs(best[2][1]) > 1e-9: text_local_final[name] = best[2]
+                    else: text_local_final.pop(name, None)
+                    insert_final[partner] = best[3]
+                    if abs(best[4][0]) > 1e-9 or abs(best[4][1]) > 1e-9: text_local_final[partner] = best[4]
+                    else: text_local_final.pop(partner, None)
+                    _rg += (base[0] - best[0][0]) + (base[1] - best[0][1])
+                    break
+        _pair_gain += _rg
+        if _rg == 0:
+            break
+    print(f'ΒΕΛΤΙΣΤΟΠΟΙΗΣΗ (κριτήρια audit): -{_opt_total_gain} μονές, -{_pair_gain} ταυτόχρονες (ζεύγη)')
     return insert_final, text_local_final
 
 if __name__ == '__main__':

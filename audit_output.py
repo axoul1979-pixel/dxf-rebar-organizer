@@ -51,7 +51,15 @@ for n in blocks:
             d=to_dict(e)
             if d.get(8,[''])[0]=='slab_center':
                 cx=float(d[10][0])+ox; cy=float(d[20][0])+oy; r=float(d[40][0])
-                circ.append((cx-r,cy-r,cx+r,cy+r,n))
+                # πραγματική ακτίνα του ΣΧΕΔΙΑΣΜΕΝΟΥ δείκτη (η CIRCLE είναι
+                # μικρότερη από ό,τι φαίνεται - βλ. σχόλιο στο pipeline_v11)
+                _ln,_x = block_lines_local(blocks[n])
+                rr = r
+                for _a,_b,_c,_dd in _ln:
+                    for _px,_py in ((_a,_b),(_c,_dd)):
+                        _d2 = math.hypot(_px+ox-cx, _py+oy-cy)
+                        if _d2 <= 2.2*r and _d2 > rr: rr = _d2
+                circ.append((cx-rr,cy-rr,cx+rr,cy+rr,n))
 cv=set()
 for n1 in keys:
     for b1,_ in allb[n1]:
@@ -402,4 +410,63 @@ try:
 except Exception:
     igviol = []
 print('ΙΓ) Κείμενο κολώνας πάνω σε hatch:', len(igviol), igviol[:8])
-print('AUDIT_TOTAL', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol)+len(stviol)+len(zviol)+len(hviol)+len(thviol)+len(iviol)+len(iaviol)+len(ibviol)+len(igviol))
+# ============================================================================
+# ΝΕΕΣ ΚΑΤΗΓΟΡΙΕΣ - ΤΥΦΛΑ ΣΗΜΕΙΑ ΤΟΥ ΕΛΕΓΧΟΥ ΠΟΥ ΕΝΤΟΠΙΣΕ Ο ΧΡΗΣΤΗΣ.
+# Μέχρι τώρα ο έλεγχος ΔΕΝ μετρούσε καθόλου: (α) γραμμή οπλισμού που κόβει
+# κείμενο ΚΟΛΩΝΑΣ ή ΔΟΚΟΥ ή δείκτη πλάκας, (β) κείμενο ΔΟΚΟΥ κομμένο από
+# δομική γραμμή, (γ) τη γραμμή-«μουστάκι» του κυκλακιού πλάκας πάνω σε κείμενο.
+# Γι' αυτό ένα σχέδιο μπορούσε να βγάζει «AUDIT_TOTAL μικρό» και να παραμένει
+# οπτικά χάλια. Χωρίς αυτές τις κατηγορίες καμία βελτιστοποίηση δεν μπορεί
+# καν να «δει» τα προβλήματα, άρα ούτε να τα λύσει.
+# ----------------------------------------------------------------------------
+# ΙΔ) Κείμενο ΚΟΛΩΝΑΣ / ΔΟΚΟΥ / δείκτη πλάκας κομμένο από γραμμή ΟΠΛΙΣΜΟΥ.
+idviol = []
+_rebar_lines_by = {}
+for _n in blocks:
+    if re.match(r'FL-?\d+_(SLABBAR|BEAMBAR)\d+$', _n):
+        _rox, _roy = ins.get(_n, (0, 0))
+        if re.match(r'FL-?\d+_BEAMBAR', _n) and _rox <= -49:
+            continue
+        _rls, _ = block_lines_local(blocks[_n])
+        _rebar_lines_by[_n] = [(a+_rox, b+_roy, c+_rox, d+_roy) for a, b, c, d in _rls]
+for n_ in sorted(blocks):
+    if not (re.match(r'FL-?\d+_(COLUMN_TEXT|BEAM_TEXT)\d+$', n_) or re.match(r'FL-?\d+_SLAB\d+$', n_)):
+        continue
+    _hit = None
+    for _b, _r in allb.get(n_, []):
+        _in = (_b[0]+0.03, _b[1]+0.03, _b[2]-0.03, _b[3]-0.03)
+        if _in[0] >= _in[2] or _in[1] >= _in[3]:
+            continue
+        for _rn, _rsegs in _rebar_lines_by.items():
+            if any(seg_intersects_bbox(_s, _in) for _s in _rsegs):
+                _hit = _rn
+                break
+        if _hit:
+            break
+    if _hit:
+        idviol.append((n_, _hit))
+print('ΙΔ) Κείμενο κολώνας/δοκού/δείκτη κομμένο από γραμμή οπλισμού:', len(idviol), idviol[:8])
+# ΙΕ) Κείμενο ΔΟΚΟΥ κομμένο από δομική γραμμή (εξαιρείται η ΔΙΚΗ του δοκός:
+# η ετικέτα ζει μέσα στη δοκό της, οι παρειές της περνούν δίπλα εξ ορισμού).
+ieviol = []
+for n_ in sorted(blocks):
+    if not re.match(r'FL-?\d+_BEAM_TEXT\d+$', n_):
+        continue
+    _own = own_struct(n_)
+    _sl2 = []
+    for _n2 in blocks:
+        if re.match(r'FL-?\d+_(BEAM|COLUMN)\d+$', _n2) and 'TEXT' not in _n2 and _n2 not in _own:
+            _s2x, _s2y = ins.get(_n2, (0, 0))
+            _ls2, _ = block_lines_local(blocks[_n2])
+            _sl2 += [(a+_s2x, b+_s2y, c+_s2x, d+_s2y) for a, b, c, d in _ls2]
+    for _b, _r in allb.get(n_, []):
+        _in = (_b[0]+0.03, _b[1]+0.03, _b[2]-0.03, _b[3]-0.03)
+        if _in[0] >= _in[2] or _in[1] >= _in[3]:
+            continue
+        if any(seg_intersects_bbox(_s, _in) for _s in _sl2):
+            ieviol.append(n_)
+            break
+print('ΙΕ) Κείμενο δοκού κομμένο από δομική γραμμή:', len(ieviol), ieviol[:8])
+print('AUDIT_TOTAL', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol)+len(stviol)+len(zviol)+len(hviol)+len(thviol)+len(iviol)+len(iaviol)+len(ibviol)+len(igviol)+len(idviol)+len(ieviol))
+print('AUDIT_TOTAL_OLD_SCOPE', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol)+len(stviol)+len(zviol)+len(hviol)+len(thviol)+len(iviol)+len(iaviol)+len(ibviol)+len(igviol))
+_SUPPRESS_OLD_TOTAL = True
