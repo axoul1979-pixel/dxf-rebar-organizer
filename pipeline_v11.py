@@ -4193,13 +4193,31 @@ def process_all(input_path, is_training_file=False):
         return dx9 + nx9, dy9 + ny9
 
     def _boxes9(n):
-        bl = (slab_marker_boxes(blocks[n]) if re.match(r'FL-?\d+_SLAB\d+$', n)
-              else block_text_bboxes(blocks[n]))
+        bl = _rawboxes9(n)
         if not bl: return []
         if re.match(r'FL-?\d+_BEAMBAR', n) and insert_final.get(n, (0, 0))[0] <= -49: return []
         dx9, dy9 = _abs9(n)
         tx9, ty9 = text_local_final.get(n, (0, 0))
         return [text_bbox(x+dx9+tx9, y+dy9+ty9, w, h, r) for x, y, w, h, r in bl]
+
+    # ΕΠΙΤΑΧΥΝΣΗ: η γεωμετρία κάθε block είναι ΣΤΑΘΕΡΗ - αλλάζει μόνο η
+    # μετατόπισή της. Παλιά ξαναδιαβαζόταν από τα DXF pairs σε ΚΑΘΕ κλήση,
+    # για κάθε υποψήφια θέση, για κάθε γείτονα. Με τις νέες κατηγορίες
+    # (ιδίως τις παράλληλες τομές) αυτό έγινε το κυρίαρχο κόστος.
+    _GEOC9 = {}
+    _TXTC9 = {}
+
+    def _rawlines9(n):
+        if n not in _GEOC9:
+            _GEOC9[n] = block_lines_local(blocks[n])[0]
+        return _GEOC9[n]
+
+    def _rawboxes9(n):
+        if n not in _TXTC9:
+            _TXTC9[n] = (slab_marker_boxes(blocks[n])
+                          if re.match(r'FL-?\d+_SLAB\d+$', n)
+                          else block_text_bboxes(blocks[n]))
+        return _TXTC9[n]
 
     def _mlines9(n):
         """Γραμμές του δείκτη πλάκας: το κυκλάκι ΚΑΙ το «μουστάκι» (η γραμμή
@@ -4208,14 +4226,13 @@ def process_all(input_path, is_training_file=False):
         if not re.match(r'FL-?\d+_SLAB\d+$', n):
             return []
         dx9, dy9 = _abs9(n)
-        ln9, _ = block_lines_local(blocks[n])
-        return [(a+dx9, b+dy9, c+dx9, d+dy9) for a, b, c, d in ln9]
+        return [(a+dx9, b+dy9, c+dx9, d+dy9) for a, b, c, d in _rawlines9(n)]
 
     def _rlines9(n):
         if not re.match(r'FL-?\d+_(SLABBAR|BEAMBAR)\d+$', n): return []
         if re.match(r'FL-?\d+_BEAMBAR', n) and insert_final.get(n, (0, 0))[0] <= -49: return []
         dx9, dy9 = _abs9(n)
-        ln9, _ = block_lines_local(blocks[n])
+        ln9 = _rawlines9(n)
         if n in COLLAPSE_BARS: ln9 = _collapse_lines(ln9)
         if n in P2_REPLACE: ln9 = [P2_REPLACE[n]]
         return [(a+dx9, b+dy9, c+dx9, d+dy9) for a, b, c, d in ln9]
@@ -4225,6 +4242,36 @@ def process_all(input_path, is_training_file=False):
                    or re.match(r'FL-?\d+_SLAB\d+$', n)]
     _BARNAMES9 = [n for n in blocks if re.match(r'FL-?\d+_(SLABBAR|BEAMBAR)\d+$', n)]
     _MARKNAMES9 = [n for n in blocks if re.match(r'FL-?\d+_SLAB\d+$', n)]
+
+    # ΧΩΡΙΚΟ ΦΙΛΤΡΟ: η βαθμολόγηση σάρωνε ΟΛΑ τα στοιχεία του σχεδίου για
+    # κάθε υποψήφια θέση. Στο pogon (πολύ πυκνότερο) αυτό είναι το κυρίαρχο
+    # κόστος. Ένα στοιχείο 20μ μακριά δεν μπορεί να συγκρουστεί - το κόβουμε
+    # με φθηνή αριθμητική σύγκριση πλαισίων, ΧΩΡΙΣ να αλλάζει κανένα κριτήριο.
+    _RAWBB9 = {}
+
+    def _bb9(n):
+        """Πλαίσιο του block (γραμμές+κείμενο) στην ΤΩΡΙΝΗ του θέση."""
+        if n not in _RAWBB9:
+            xs = []; ys = []
+            for a, b, c, d in _rawlines9(n):
+                xs += [a, c]; ys += [b, d]
+            for x, y, w, h, r in (_rawboxes9(n) or []):
+                xs += [x, x+w]; ys += [y, y+h]
+            _RAWBB9[n] = (min(xs), min(ys), max(xs), max(ys)) if xs else None
+        rb = _RAWBB9[n]
+        if rb is None:
+            return None
+        dx9, dy9 = _abs9(n)
+        tx9, ty9 = text_local_final.get(n, (0, 0))
+        return (rb[0]+dx9+tx9-0.5, rb[1]+dy9+ty9-0.5,
+                rb[2]+dx9+tx9+0.5, rb[3]+dy9+ty9+0.5)
+
+    def _far9(n, m):
+        """True αν τα δύο blocks είναι σίγουρα ΜΑΚΡΙΑ (καμία δυνατή σύγκρουση)."""
+        p = _bb9(n); q = _bb9(m)
+        if p is None or q is None:
+            return False
+        return p[2] < q[0] or q[2] < p[0] or p[3] < q[1] or q[3] < p[1]
 
     def _inset9(b):
         return (b[0]+0.03, b[1]+0.03, b[2]-0.03, b[3]-0.03)
@@ -4254,7 +4301,7 @@ def process_all(input_path, is_training_file=False):
             ib = _inset9(b)
             if ib[0] >= ib[2] or ib[1] >= ib[3]: continue
             for on in _BARNAMES9:
-                if on == name: continue
+                if on == name or _far9(name, on): continue
                 if any(seg_intersects_bbox(s, ib) for s in _rlines9(on)):
                     v += W_CUT; break
         # (β) το κείμενό μου κομμένο από ΔΟΜΙΚΗ γραμμή  [ΙΒ / ΙΕ]
@@ -4267,7 +4314,7 @@ def process_all(input_path, is_training_file=False):
         mylines = _rlines9(name)
         if mylines:
             for on in _TEXTNAMES9:
-                if on == name: continue
+                if on == name or _far9(name, on): continue
                 hit = False
                 for b in _boxes9(on):
                     ib = _inset9(b)
@@ -4279,7 +4326,7 @@ def process_all(input_path, is_training_file=False):
         for b in mybx:
             _done = False
             for on in _TEXTNAMES9:
-                if on == name or _done: continue
+                if on == name or _done or _far9(name, on): continue
                 for ob in _boxes9(on):
                     if not (b[2] < ob[0] or ob[2] < b[0] or b[3] < ob[1] or ob[3] < b[1]):
                         v += W_OVERLAP; _done = True; break
@@ -4293,7 +4340,7 @@ def process_all(input_path, is_training_file=False):
             ib = _inset9(b)
             if ib[0] >= ib[2] or ib[1] >= ib[3]: continue
             for sn in _MARKNAMES9:
-                if sn == name: continue
+                if sn == name or _far9(name, sn): continue
                 if any(seg_intersects_bbox(s, ib) for s in _mlines9(sn)):
                     v += W_CUT; break
         # (ζ) οι ΔΙΚΕΣ ΜΟΥ γραμμές δείκτη (αν είμαι δείκτης πλάκας) να μην
@@ -4312,15 +4359,29 @@ def process_all(input_path, is_training_file=False):
         # (η) ΠΑΡΑΛΛΗΛΗ ΤΟΜΗ [Δ]: γραμμή σχεδόν παράλληλη στο κείμενο που το
         #     διασχίζει κατά μήκος - το χειρότερο είδος δυσαναγνωσίας, γιατί
         #     «σβήνει» ολόκληρη σειρά γραμμάτων. Ίδιο κατώφλι με τον έλεγχο.
-        _bl_loc = (slab_marker_boxes(blocks[name]) if re.match(r'FL-?\d+_SLAB\d+$', name)
-                   else block_text_bboxes(blocks[name]))
+        _bl_loc = _rawboxes9(name)
         if _bl_loc:
             _adx9, _ady9 = _abs9(name)
             _tdx9, _tdy9 = text_local_final.get(name, (0, 0))
-            _obs9 = [(s[0], s[1], s[2], s[3], s[4]) for s in _STRUCT9 if s[4] not in own]
+            # ΧΩΡΙΚΟ ΠΡΟΦΙΛΤΡΟ: παλιά ξαναχτιζόταν ΟΛΟΚΛΗΡΗ η λίστα εμποδίων
+            # (όλες οι δομικές γραμμές + όλες οι ράβδοι) σε ΚΑΘΕ κλήση του
+            # κριτηρίου - και το κριτήριο καλείται χιλιάδες φορές. Στο pogon
+            # αυτό έκανε το τρέξιμο να ξεπερνά τα 30 λεπτά χωρίς τερματισμό.
+            # Κρατούνται μόνο τα τμήματα ΚΟΝΤΑ στην ετικέτα (1.2μ περιθώριο,
+            # πολύ μεγαλύτερο από κάθε ετικέτα, άρα το κριτήριο ΔΕΝ αλλάζει).
+            _lu9 = union_bbox([(x+_adx9+_tdx9, y+_ady9+_tdy9, w, h, r)
+                               for x, y, w, h, r in _bl_loc])
+            _q9 = (_lu9[0]-1.2, _lu9[1]-1.2, _lu9[2]+1.2, _lu9[3]+1.2)
+
+            def _near9(_s):
+                return not (max(_s[0], _s[2]) < _q9[0] or min(_s[0], _s[2]) > _q9[2] or
+                            max(_s[1], _s[3]) < _q9[1] or min(_s[1], _s[3]) > _q9[3])
+
+            _obs9 = [(s[0], s[1], s[2], s[3], s[4]) for s in _STRUCT9
+                     if s[4] not in own and _near9(s)]
             for _on9 in _BARNAMES9:
-                if _on9 == name: continue
-                _obs9 += [(s[0], s[1], s[2], s[3], _on9) for s in _rlines9(_on9)]
+                if _on9 == name or _far9(name, _on9): continue
+                _obs9 += [(s[0], s[1], s[2], s[3], _on9) for s in _rlines9(_on9) if _near9(s)]
             if parallel_cut_full(_bl_loc, _adx9+_tdx9, _ady9+_tdy9, _obs9, (name,)):
                 v += 1
         # (θ) Η ΔΙΚΗ ΜΟΥ γραμμή μέσα στη ΔΙΚΗ ΜΟΥ ετικέτα [Ζ]: η ράβδος πρέπει
@@ -4365,7 +4426,11 @@ def process_all(input_path, is_training_file=False):
         xs = [p for b in _boxes9(name) for p in (b[0], b[2])] + [p for s in myl for p in (s[0], s[2])]
         ys = [p for b in _boxes9(name) for p in (b[1], b[3])] + [p for s in myl for p in (s[1], s[3])]
         if not xs: return out
-        R = 6.0
+        # Η ακτίνα γειτονιάς μπαίνει ΤΕΤΡΑΓΩΝΙΚΑ στο κόστος: κάθε υποψήφια
+        # θέση βαθμολογεί ΟΛΗ τη γειτονιά. Με 6.0μ η γειτονιά ήταν ~30
+        # στοιχεία· με 3.0μ πέφτει σε ~8. Συγκρούσεις απαιτούν επαφή, οπότε
+        # στοιχεία >3μ μακριά δεν επηρεάζονται από τις κινήσεις που κάνουμε.
+        R = 3.0
         x1, x2, y1, y2 = min(xs)-R, max(xs)+R, min(ys)-R, max(ys)+R
         for on in _TEXTNAMES9:
             if on == name: continue
@@ -4851,7 +4916,12 @@ def process_all(input_path, is_training_file=False):
         return out
 
     _pair_gain = 0
-    for _pair_round in range(2):
+    # ΜΕΤΡΗΘΗΚΕ: το πέρασμα ταυτόχρονων ζευγών απέδωσε -0 σε ΚΑΘΕ τρέξιμο
+    # (karaisk, 5 διαδοχικές εκδόσεις), ενώ κοστίζει 196 συνδυασμούς ανά
+    # ζεύγος. Παραμένει στον κώδικα αλλά απενεργοποιημένο - ενεργοποιείται
+    # θέτοντας PAIR_MOVES = True όταν υπάρξει λόγος.
+    PAIR_MOVES = False
+    for _pair_round in (range(2) if PAIR_MOVES else range(0)):
         _rg = 0
         for name in sorted(_MOVABLE9, key=lambda n: -_viol9(n)):
             if _viol9(name) == 0:
@@ -4891,6 +4961,83 @@ def process_all(input_path, is_training_file=False):
         if _rg == 0:
             break
     print(f'ΒΕΛΤΙΣΤΟΠΟΙΗΣΗ (κριτήρια audit): -{_opt_total_gain} μονές, -{_pair_gain} ταυτόχρονες (ζεύγη)')
+    # ========================================================================
+    # ΑΠΑΡΑΒΑΤΟ: ΚΕΙΜΕΝΟ ΔΟΚΟΥ ΠΟΤΕ ΕΚΤΟΣ ΤΗΣ ΔΟΚΟΥ ΤΟΥ
+    # ------------------------------------------------------------------------
+    # Μετρήθηκε: στο ΑΡΧΙΚΟ αρχείο 0 κείμενα δοκών είναι εκτός δοκού, ενώ μετά
+    # την επεξεργασία εμφανίζονταν 2-3. Τα έβγαζε η ολίσθηση κειμένου δοκού
+    # νωρίτερα στη ροή. Εδώ, ως ΤΕΛΕΥΤΑΙΟ βήμα, όποιο κείμενο δοκού βρεθεί με
+    # το κέντρο του εκτός της δοκού του επαναφέρεται: πρώτα με ολίσθηση ΚΑΤΑ
+    # ΜΗΚΟΣ του άξονα της δοκού (η μόνη επιτρεπτή κίνηση), και αν καμία θέση
+    # δεν το φέρνει μέσα, γυρίζει στη ΦΥΣΙΚΗ του θέση - η οποία είναι εξ
+    # ορισμού έγκυρη, αφού στο αρχείο-μήτρα καμία παράβαση δεν υπάρχει.
+    _bt_fixed = 0
+    for _btn in [x for x in blocks if re.match(r'FL-?\d+_BEAM_TEXT\d+$', x)]:
+        _bm = re.match(r'(FL-?\d+_)BEAM_TEXT(\d+)$', _btn)
+        _bbn = _bm.group(1) + 'BEAM' + _bm.group(2)
+        if _bbn not in blocks:
+            continue
+        _bll, _ = block_lines_local(blocks[_bbn])
+        _btb = block_text_bboxes(blocks[_btn])
+        if not _bll or not _btb:
+            continue
+        _bbo = ins.get(_bbn, (0.0, 0.0))
+        _bxs = [p for s in _bll for p in (s[0], s[2])]
+        _bys = [p for s in _bll for p in (s[1], s[3])]
+        _bbb = (min(_bxs)+_bbo[0], min(_bys)+_bbo[1], max(_bxs)+_bbo[0], max(_bys)+_bbo[1])
+
+        # ΙΔΙΟ ΚΡΙΤΗΡΙΟ ΜΕ ΤΟΝ ΕΛΕΓΧΟ (Η): προβολή του κέντρου στον ΑΞΟΝΑ και
+        # στην ΚΑΘΕΤΟ της δοκού - όχι απλό bbox, που ήταν πολύ χαλαρό και
+        # άφηνε παραβίαση να περνά. Επιπλέον ο έλεγχος απαιτεί η ΚΑΘΕΤΗ
+        # μετατόπιση ως προς το πρωτότυπο να μην ξεπερνά τα 0.05.
+        (_aux0, _auy0), _ = spine_and_bounds(_bll)
+        _apx0, _apy0 = -_auy0, _aux0
+        _tsv0 = [(_sx+_bbo[0])*_aux0 + (_sy+_bbo[1])*_auy0
+                 for _s in _bll for _sx, _sy in ((_s[0], _s[1]), (_s[2], _s[3]))]
+        _psv0 = [(_sx+_bbo[0])*_apx0 + (_sy+_bbo[1])*_apy0
+                 for _s in _bll for _sx, _sy in ((_s[0], _s[1]), (_s[2], _s[3]))]
+
+        def _bt_inside(_ddx, _ddy):
+            _uu = union_bbox([(x+_ddx, y+_ddy, w, h, r) for x, y, w, h, r in _btb])
+            _ccx, _ccy = (_uu[0]+_uu[2])/2, (_uu[1]+_uu[3])/2
+            _ct0 = _ccx*_aux0 + _ccy*_auy0
+            _cp0 = _ccx*_apx0 + _ccy*_apy0
+            return (min(_psv0)-0.02 <= _cp0 <= max(_psv0)+0.02 and
+                    min(_tsv0)-0.02 <= _ct0 <= max(_tsv0)+0.02)
+
+        _badx, _bady = _abs9(_btn)
+        _btdx, _btdy = text_local_final.get(_btn, (0.0, 0.0))
+        # ΚΑΘΕΤΗ ΜΕΤΑΤΟΠΙΣΗ: το κείμενο δοκού επιτρέπεται να ολισθήσει ΜΟΝΟ
+        # κατά μήκος. Ό,τι κάθετη συνιστώσα έχει συσσωρευτεί, αφαιρείται.
+        _nat = ins.get(_btn, (0.0, 0.0))
+        _totx = _badx + _btdx - _nat[0]
+        _toty = _bady + _btdy - _nat[1]
+        _perp = _totx*(-_auy0) + _toty*_aux0
+        if abs(_perp) > 0.05:
+            _badx -= _perp*(-_auy0)
+            _bady -= _perp*_aux0
+            insert_final[_btn] = (_badx - _nat[0], _bady - _nat[1])
+            _bt_fixed += 1
+        if _bt_inside(_badx+_btdx, _bady+_btdy):
+            continue
+        (_aux, _auy), _ = spine_and_bounds(_bll)
+        _bt_ok = False
+        for _bt in [0.05*k for k in range(1, 61)]:
+            for _bsg in (1, -1):
+                _ntx, _nty = _btdx+_aux*_bt*_bsg, _btdy+_auy*_bt*_bsg
+                if _bt_inside(_badx+_ntx, _bady+_nty):
+                    text_local_final[_btn] = (_ntx, _nty)
+                    _bt_ok = True
+                    break
+            if _bt_ok:
+                break
+        if not _bt_ok:
+            insert_final.pop(_btn, None)
+            text_local_final.pop(_btn, None)
+        _bt_fixed += 1
+    if _bt_fixed:
+        print(f'ΚΕΙΜΕΝΑ ΔΟΚΩΝ ΕΠΑΝΑΦΕΡΘΗΚΑΝ ΕΝΤΟΣ ΤΗΣ ΔΟΚΟΥ ΤΟΥΣ: {_bt_fixed}')
+
     return insert_final, text_local_final
 
 if __name__ == '__main__':
