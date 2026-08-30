@@ -4192,13 +4192,29 @@ def process_all(input_path, is_training_file=False):
         nx9, ny9 = ins.get(n, (0.0, 0.0))
         return dx9 + nx9, dy9 + ny9
 
+    # MEMOIZATION ΜΕΤΑΦΡΑΣΜΕΝΗΣ ΓΕΩΜΕΤΡΙΑΣ: κατά την αξιολόγηση των υποψηφίων
+    # θέσεων ενός στοιχείου, ΜΟΝΟ αυτό μετακινείται - οι γείτονες μένουν
+    # ακίνητοι. Παρ' όλα αυτά τα κουτιά τους ξαναϋπολογίζονταν (με τριγωνομετρία
+    # περιστροφής) για ΚΑΘΕ υποψήφια θέση. Το κλειδί περιλαμβάνει τις
+    # μετατοπίσεις, οπότε μόλις κάτι όντως κινηθεί το cache αστοχεί σωστά.
+    _BOXM9 = {}
+    _LINM9 = {}
+
     def _boxes9(n):
         bl = _rawboxes9(n)
         if not bl: return []
+        _k9 = (n, insert_final.get(n, (0, 0)), text_local_final.get(n, (0, 0)))
+        _c9 = _BOXM9.get(_k9)
+        if _c9 is not None:
+            return _c9
         if re.match(r'FL-?\d+_BEAMBAR', n) and insert_final.get(n, (0, 0))[0] <= -49: return []
         dx9, dy9 = _abs9(n)
         tx9, ty9 = text_local_final.get(n, (0, 0))
-        return [text_bbox(x+dx9+tx9, y+dy9+ty9, w, h, r) for x, y, w, h, r in bl]
+        _r9 = [text_bbox(x+dx9+tx9, y+dy9+ty9, w, h, r) for x, y, w, h, r in bl]
+        if len(_BOXM9) > 60000:
+            _BOXM9.clear()
+        _BOXM9[_k9] = _r9
+        return _r9
 
     # ΕΠΙΤΑΧΥΝΣΗ: η γεωμετρία κάθε block είναι ΣΤΑΘΕΡΗ - αλλάζει μόνο η
     # μετατόπισή της. Παλιά ξαναδιαβαζόταν από τα DXF pairs σε ΚΑΘΕ κλήση,
@@ -4225,8 +4241,16 @@ def process_all(input_path, is_training_file=False):
         «λυνόταν» και κατέληγε πάνω στη γραμμή του κυκλακιού."""
         if not re.match(r'FL-?\d+_SLAB\d+$', n):
             return []
+        _k9 = (n, insert_final.get(n, (0, 0)))
+        _c9 = _LINM9.get(_k9)
+        if _c9 is not None:
+            return _c9
         dx9, dy9 = _abs9(n)
-        return [(a+dx9, b+dy9, c+dx9, d+dy9) for a, b, c, d in _rawlines9(n)]
+        _r9 = [(a+dx9, b+dy9, c+dx9, d+dy9) for a, b, c, d in _rawlines9(n)]
+        if len(_LINM9) > 60000:
+            _LINM9.clear()
+        _LINM9[_k9] = _r9
+        return _r9
 
     def _rlines9(n):
         if not re.match(r'FL-?\d+_(SLABBAR|BEAMBAR)\d+$', n): return []
@@ -4455,6 +4479,22 @@ def process_all(input_path, is_training_file=False):
                     continue
                 break
         return c
+
+    def _score9_cap(names, cap):
+        """Ίδιο με _score9, αλλά ΣΤΑΜΑΤΑ μόλις ξεπεράσει το `cap`.
+
+        Οι περισσότερες υποψήφιες θέσεις είναι χειρότερες από την τρέχουσα και
+        απορρίπτονται· δεν υπάρχει λόγος να υπολογιστεί το ακριβές τους σκορ.
+        Επιστρέφει (σκορ, πλήρες) - αν πλήρες=False, το σκορ είναι ΚΑΤΩ ΦΡΑΓΜΑ
+        που ήδη ξεπερνά το cap, άρα η υποψήφια απορρίπτεται ούτως ή άλλως.
+        """
+        s0 = 0
+        for n in names:
+            s0 += _viol9(n)
+            if s0 > cap:
+                return (s0, 0), False
+        s1 = sum(_ovl9(n) for n in names)
+        return (s0, s1), True
 
     def _score9(names):
         # ΛΕΞΙΚΟΓΡΑΦΙΚΟ ΣΚΟΡ. Με σκέτο άθροισμα, κινήσεις που ΑΝΤΑΛΛΑΣΣΟΥΝ μια
@@ -4734,29 +4774,84 @@ def process_all(input_path, is_training_file=False):
     _queue9 = _deque9(sorted(_MOVABLE9, key=lambda n: -_viol9(n)))
     _inq9 = set(_queue9)
     _steps9 = 0
+    # ΧΡΟΝΙΚΟ ΟΡΙΟ: το όριο βημάτων (6000) ΔΕΝ εγγυάται τερματισμό, γιατί σε
+    # πυκνά σχέδια (pogon) το κόστος ΑΝΑ ΒΗΜΑ εκτοξεύεται - μετρήθηκε >25
+    # λεπτά χωρίς να τελειώσει. Εδώ μπαίνει όριο ΠΡΑΓΜΑΤΙΚΟΥ ΧΡΟΝΟΥ: όταν
+    # εξαντληθεί, η βελτιστοποίηση σταματά και κρατά ό,τι ΚΑΛΥΤΕΡΟ έχει βρει
+    # ως εκείνη τη στιγμή. Κάθε αποδεκτή κίνηση έχει ήδη περάσει τον έλεγχο
+    # «αυστηρά καλύτερο», άρα η πρόωρη διακοπή ΔΕΝ μπορεί να αφήσει το σχέδιο
+    # χειρότερο από την αρχή - απλώς λιγότερο βελτιωμένο.
+    # Ρυθμίζεται με τη μεταβλητή περιβάλλοντος AUTOTIDY_OPT_SECONDS.
+    import time as _t9
+    import os as _os9
+    _budget9 = float(_os9.environ.get('AUTOTIDY_OPT_SECONDS', '180'))
+    _t09 = _t9.time()
+    _hit_budget9 = False
     if True:
         while _queue9 and _steps9 < 6000:
+            if _t9.time() - _t09 > _budget9:
+                _hit_budget9 = True
+                break
             _steps9 += 1
             name = _queue9.popleft()
             _inq9.discard(name)
             if _viol9(name) == 0:
                 continue
             nb = _neighbours9(name)
+            # ΔΟΚΙΜΑΣΤΗΚΕ «διαφορική βαθμολόγηση» (υπολογισμός μόνο των
+            # στοιχείων που μπορούν να επηρεαστούν, υπόλοιπα ως σταθερά).
+            # ΜΕΤΡΗΘΗΚΕ ΧΕΙΡΟΤΕΡΗ: 257s -> 372s. Αιτία: με ακτίνα γειτονιάς
+            # 3.0μ η γειτονιά είναι ήδη μικρή (~8 στοιχεία), ενώ η μέγιστη
+            # υποψήφια μετατόπιση φτάνει τα 4.2μ - οπότε σχεδόν ΟΛΑ τα
+            # στοιχεία έμπαιναν ούτως ή άλλως στο «επηρεαζόμενο» σύνολο και
+            # το επιπλέον λογιστικό κόστος (πλαίσια, μέγιστη απόσταση,
+            # διαχωρισμός συνόλων) πληρωνόταν χωρίς όφελος. Αφαιρέθηκε.
+            _cands9 = _candidates9(name)
             base = _score9(nb)
             if base[0] == 0 and base[1] == 0:
                 continue
             sv_i = insert_final.get(name, None)
             sv_t = text_local_final.get(name, None)
             best = None
-            for ci, ct in _candidates9(name):
-                insert_final[name] = ci
-                if abs(ct[0]) > 1e-9 or abs(ct[1]) > 1e-9:
-                    text_local_final[name] = ct
+            # ΧΟΝΔΡΙΚΗ -> ΛΕΠΤΗ ΑΝΑΖΗΤΗΣΗ: αντί για ~80 υποψήφιες σε σταθερό
+            # πλέγμα, πρώτα σαρώνεται 1 στις 3 (χονδρικό πέρασμα) και μετά
+            # εξετάζονται λεπτομερώς ΜΟΝΟ οι γειτονικές της καλύτερης. Η
+            # συνάρτηση κόστους είναι ομαλή ως προς τη μετατόπιση, οπότε το
+            # βέλτιστο βρίσκεται σχεδόν πάντα δίπλα στο χονδρικό βέλτιστο.
+            # ΜΕΤΡΗΘΗΚΕ: με βήμα 3 (χονδρικό πλέγμα) ο χρόνος έπεσε 379s->104s
+            # ΑΛΛΑ η ποιότητα χάλασε (audit 8 -> 12): η συνάρτηση κόστους ΔΕΝ
+            # είναι αρκετά ομαλή, καλές θέσεις υπάρχουν ΑΝΑΜΕΣΑ στα χονδρικά
+            # βήματα και χάνονταν. Βήμα 1 = εξαντλητική σάρωση (καμία απώλεια).
+            # Η επιτάχυνση προέρχεται πλέον ΜΟΝΟ από την πρόωρη διακοπή, που
+            # είναι ΑΚΡΙΒΗΣ: δεν αλλάζει ποτέ ποια υποψήφια επιλέγεται.
+            _coarse = [(_k, _cands9[_k]) for _k in range(len(_cands9))]
+            _seen_idx = set(_k for _k, _ in _coarse)
+
+            def _eval9(_ci, _ct):
+                insert_final[name] = _ci
+                if abs(_ct[0]) > 1e-9 or abs(_ct[1]) > 1e-9:
+                    text_local_final[name] = _ct
                 elif name in text_local_final:
                     del text_local_final[name]
-                sc = _score9(nb)
-                if sc < base and (best is None or sc < best[0]):
-                    best = (sc, ci, ct)
+                # ΠΡΟΩΡΗ ΔΙΑΚΟΠΗ: φράγμα το καλύτερο ως τώρα (ή το base)
+                _cap = (best[0][0] if best is not None else base[0])
+                _sc, _full = _score9_cap(nb, _cap)
+                return _sc if _full else None
+
+            _bestk = None
+            for _k, (ci, ct) in _coarse:
+                sc = _eval9(ci, ct)
+                if sc is not None and sc < base and (best is None or sc < best[0]):
+                    best = (sc, ci, ct); _bestk = _k
+            # λεπτό πέρασμα γύρω από το χονδρικό βέλτιστο
+            if _bestk is not None:
+                for _k in range(max(0, _bestk-2), min(len(_cands9), _bestk+3)):
+                    if _k in _seen_idx:
+                        continue
+                    ci, ct = _cands9[_k]
+                    sc = _eval9(ci, ct)
+                    if sc is not None and sc < base and (best is None or sc < best[0]):
+                        best = (sc, ci, ct)
             if best is not None:
                 insert_final[name] = best[1]
                 if abs(best[2][0]) > 1e-9 or abs(best[2][1]) > 1e-9:
@@ -4876,7 +4971,12 @@ def process_all(input_path, is_training_file=False):
             insert_final.clear(); text_local_final.clear()
             if best7 is not None:
                 insert_final.update(best7[1]); text_local_final.update(best7[2])
-                _pair_gain7 += (base - best7[0])
+                # ΔΙΟΡΘΩΣΗ: το σκορ έγινε λεξικογραφικό (πλειάδα) και αυτό το
+                # σημείο είχε μείνει με αριθμητική αφαίρεση -> TypeError.
+                # Το karaisk δεν το χτυπούσε (δεν έβρισκε ποτέ best7), το
+                # pogon ναι: ΓΙ' ΑΥΤΟ δεν παρήγαγε ποτέ αρχείο - δεν ήταν
+                # αργό, ΕΣΚΑΖΕ.
+                _pair_gain7 += (base[0] - best7[0][0]) + (base[1] - best7[0][1])
             else:
                 insert_final.update(sv_all[0]); text_local_final.update(sv_all[1])
     print(f'ΤΑΥΤΟΧΡΟΝΕΣ ΜΕΤΑΚΙΝΗΣΕΙΣ (2-3 στοιχεία): -{_pair_gain7} παραβιάσεις')
@@ -4961,6 +5061,9 @@ def process_all(input_path, is_training_file=False):
         if _rg == 0:
             break
     print(f'ΒΕΛΤΙΣΤΟΠΟΙΗΣΗ (κριτήρια audit): -{_opt_total_gain} μονές, -{_pair_gain} ταυτόχρονες (ζεύγη)')
+    if _hit_budget9:
+        print(f'   (χρονικό όριο {_budget9:.0f}s: σταμάτησε στα {_steps9} βήματα, '
+              f'{len(_queue9)} στοιχεία έμειναν στην ουρά)')
     # ========================================================================
     # ΑΠΑΡΑΒΑΤΟ: ΚΕΙΜΕΝΟ ΔΟΚΟΥ ΠΟΤΕ ΕΚΤΟΣ ΤΗΣ ΔΟΚΟΥ ΤΟΥ
     # ------------------------------------------------------------------------
