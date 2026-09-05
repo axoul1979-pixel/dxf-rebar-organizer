@@ -11,6 +11,12 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC, OUT = ROOT / 'src', ROOT / 'index.html'
 
+# ΑΠΑΡΑΒΑΤΟ: ο ενσωματωμένος κώδικας Python ξαναχτίζεται ΠΑΝΤΑ από τα
+# pipeline/*.py πριν φτιαχτεί το index.html. Χωρίς αυτό, ο browser έτρεχε
+# ΠΑΛΙΟ κώδικα και τα αποτελέσματα απέκλιναν από τη γραμμή εντολών.
+import build_pipeline_bundle as _bundle
+_bundle.embed_in_base_index(_bundle.build_monolith())
+
 src  = (SRC / 'base_index.html').read_text(encoding='utf-8')
 tail = (SRC / 'app.js').read_text(encoding='utf-8').replace(
        '/*__MERGE_MODULE__*/', (SRC / 'merge_dxf.js').read_text(encoding='utf-8'))

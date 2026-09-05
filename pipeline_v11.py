@@ -1305,7 +1305,15 @@ def process_all(input_path, is_training_file=False):
     SLAB_POLYS_MAP.update(get_slab_polys(input_path))
     SLABBAR_HOME_SLAB.clear()
     BIG = 1e9
-    for name in slab_res:
+    # ΔΙΟΡΘΩΣΗ (marath00/SLABBAR7): η ζώνη οριζόταν ΜΟΝΟ για όσες ράβδους
+    # επέστρεφε ο ευρετικός. Όποια ράβδος έπαιρνε 'NO FREE SPOT' έπεφτε έξω
+    # από το slab_res, άρα ΔΕΝ έπαιρνε ποτέ ζώνη - και ο βελτιστοποιητής τη
+    # μετακινούσε/ολισθούσε ΑΝΕΞΕΛΕΓΚΤΑ (η εφεδρεία «πάγωμα ±0.35» ήταν
+    # ΜΕΣΑ στον ίδιο βρόχο, άρα δεν έπιανε ποτέ γι' αυτές). Πλέον η ζώνη
+    # ορίζεται για ΚΑΘΕ SLABBAR block, ανεξάρτητα από τον ευρετικό.
+    _ALL_SLABBARS = sorted([n for n in blocks if re.match(r'FL-?\d+_SLABBAR\d+$', n)],
+                           key=lambda n: int(re.search(r'\d+$', n).group()))
+    for name in _ALL_SLABBARS:
         blines,_ = block_lines_local(blocks[name])
         if not blines: continue
         # Η πλάκα-σπίτι ορίζεται από τη ΦΥΣΙΚΗ θέση του αρχείου εισόδου, ΟΧΙ από
@@ -2842,7 +2850,7 @@ def process_all(input_path, is_training_file=False):
                                     break
                                 sol2c = None
                                 # δοκίμασε και σύρσιμο στη νέα θέση
-                                snap_b = insert_final.get(cn)
+                                snap_b = insert_final.get(cn, (0.0, 0.0))
                                 insert_final[cn] = (nbx, nby)
                                 sol2c = _slide_text_along(cn, final_rebar_lines(exclude=(cn,)), c_placed)
                                 if sol2c is not None:
@@ -4506,10 +4514,39 @@ def process_all(input_path, is_training_file=False):
         # αναγνωσιμότητας.
         return (sum(_viol9(n) for n in names), sum(_ovl9(n) for n in names))
 
+    def _anchor_ok9(name, lines, tlx, tly):
+        """ΕΝΑΣ ΚΡΙΤΗΣ ΓΙΑ ΤΗΝ ΑΓΚΥΡΩΣΗ - πανομοιότυπος κανόνας με την
+        _slide_text_along. Η ετικέτα ΔΕΝ χάνει ποτέ την επαφή με τη ράβδο της:
+        το διάστημά της κατά μήκος του άξονα πρέπει να τέμνει το [lo,hi] της
+        ράβδου, και η συνολική ολίσθηση ΑΠΟ ΤΗ ΦΥΣΙΚΗ θέση δεν ξεπερνά το
+        MAX_SLIDE. Το «από τη φυσική» είναι κρίσιμο: ο βελτιστοποιητής χτίζει
+        τις υποψήφιες πάνω στην ΤΡΕΧΟΥΣΑ μετατόπιση και ξαναεπισκέπτεται το
+        ίδιο στοιχείο, άρα χωρίς απόλυτο φράγμα η ολίσθηση ΣΥΣΣΩΡΕΥΕΤΑΙ
+        (μετρήθηκε 3.00μ στο marath00/FL0_SLABBAR7: η ετικέτα κατέληξε 1.02μ
+        ΠΑΝΩ από το άκρο της ράβδου, με τη ράβδο ακίνητη)."""
+        if not lines:
+            return True
+        _bl = block_text_bboxes(blocks[name])
+        if not _bl:
+            return True
+        (aux, auy), (alo, ahi) = spine_and_bounds(lines)
+        _sh = tlx*aux + tly*auy
+        if abs(_sh) > MAX_SLIDE + 1e-6:
+            return False
+        _pr = []
+        for _x, _y, _w, _h, _r in _bl:
+            _bb = text_bbox(_x, _y, _w, _h, _r)
+            _pr += [_bb[0]*aux+_bb[1]*auy, _bb[2]*aux+_bb[3]*auy]
+        _tlo, _thi = min(_pr), max(_pr)
+        if _tlo + _sh > ahi + 1e-6 or _thi + _sh < alo - 1e-6:
+            return False
+        return True
+
     def _candidates9(name):
         """Υποψήφιες θέσεις: φυσική (0,0), τωρινή, και μετατοπίσεις κάθετα/κατά
         μήκος. Κάθε υποψήφια σέβεται τους ΑΠΑΡΑΒΑΤΟΥΣ κανόνες (όρια πλάκας,
-        πλευρά δοκού) - η βελτιστοποίηση ΔΕΝ χαλαρώνει κανέναν κανόνα."""
+        πλευρά δοκού, ΑΓΚΥΡΩΣΗ ετικέτας στη ράβδο) - η βελτιστοποίηση ΔΕΝ
+        χαλαρώνει κανέναν κανόνα."""
         cur_i = insert_final.get(name, (0.0, 0.0))
         cur_t = text_local_final.get(name, (0.0, 0.0))
         cands = [(cur_i, cur_t)]
@@ -4528,7 +4565,10 @@ def process_all(input_path, is_training_file=False):
             (bux, buy), (blo, bhi) = spine_and_bounds(lines)
             for t9 in [0.10*k for k in range(1, 21)]:
                 for sg in (1, -1):
-                    cands.append((cur_i, (cur_t[0]+bux*t9*sg, cur_t[1]+buy*t9*sg)))
+                    _nt9 = (cur_t[0]+bux*t9*sg, cur_t[1]+buy*t9*sg)
+                    if not _anchor_ok9(name, lines, _nt9[0], _nt9[1]):
+                        continue
+                    cands.append((cur_i, _nt9))
             return cands
         if _ismarker:
             # ΔΕΙΚΤΗΣ ΠΛΑΚΑΣ (κυκλάκι + μουστάκι): μικρές μετατοπίσεις, ώστε να
@@ -4567,6 +4607,8 @@ def process_all(input_path, is_training_file=False):
             for t in [0.10*k for k in range(1, 26)]:
                 for sg in (1, -1):
                     _nt = (cur_t[0]+ux*t*sg, cur_t[1]+uy*t*sg)
+                    if not _anchor_ok9(name, lines, _nt[0], _nt[1]):
+                        continue
                     if _hb and _lb0:
                         _adx, _ady = _abs9(name)
                         _u0 = union_bbox([(x+_adx+_nt[0], y+_ady+_nt[1], w, h, r)
@@ -5140,6 +5182,55 @@ def process_all(input_path, is_training_file=False):
         _bt_fixed += 1
     if _bt_fixed:
         print(f'ΚΕΙΜΕΝΑ ΔΟΚΩΝ ΕΠΑΝΑΦΕΡΘΗΚΑΝ ΕΝΤΟΣ ΤΗΣ ΔΟΚΟΥ ΤΟΥΣ: {_bt_fixed}')
+
+    # ΤΕΛΙΚΟΣ ΦΡΟΥΡΟΣ ΑΓΚΥΡΩΣΗΣ (ΜΕΤΑ ΑΠ' ΟΛΑ, ώστε καμία σειρά περασμάτων να
+    # μην τον προσπερνά): καμία ετικέτα οπλισμού δεν μένει αποκολλημένη κατά
+    # μήκος από τη ράβδο της. Επαναφορά στην ΚΟΝΤΙΝΟΤΕΡΗ ολίσθηση που κρατά
+    # την επαφή - όχι τυφλά στη φυσική, ώστε να μη χαθεί η τακτοποίηση.
+    _anch_fixed = 0
+    for _an in sorted(blocks):
+        if not re.match(r'FL-?\d+_(BEAMBAR|SLABBAR)\d+$', _an):
+            continue
+        _adx, _ady = insert_final.get(_an, (0.0, 0.0))
+        if re.match(r'FL-?\d+_BEAMBAR', _an) and _adx <= -49:
+            continue
+        _al, _ = block_lines_local(blocks[_an])
+        # ΕΝΑΣ ΚΡΙΤΗΣ: κρίνουμε ως προς τη ΓΕΩΜΕΤΡΙΑ ΠΟΥ ΘΑ ΓΡΑΦΤΕΙ, όχι ως προς
+        # την αρχική. Αλλιώς σε ράβδο P2/κατάρρευσης η ετικέτα «αγκυρώνεται»
+        # σε γραμμές που δεν υπάρχουν πια στο αρχείο εξόδου (pogon06/SLABBAR17).
+        if _an in P2_REPLACE:
+            _al = [P2_REPLACE[_an]]
+        elif _an in COLLAPSE_BARS:
+            _al = _collapse_lines(_al)
+        _abl = block_text_bboxes(blocks[_an])
+        if not _al or not _abl:
+            continue
+        _at = text_local_final.get(_an, (0.0, 0.0))
+        (_aux, _auy), (_alo, _ahi) = spine_and_bounds(_al)
+        _apr = []
+        for _x, _y, _w, _h, _r in _abl:
+            _bb = text_bbox(_x, _y, _w, _h, _r)
+            _apr += [_bb[0]*_aux+_bb[1]*_auy, _bb[2]*_aux+_bb[3]*_auy]
+        _tlo, _thi = min(_apr), max(_apr)
+        _sh = _at[0]*_aux + _at[1]*_auy
+        # Σε ράβδο P2/κατάρρευσης η ετικέτα ΞΑΝΑΚΕΝΤΡΑΡΕΤΑΙ στη νέα γραμμή, οπότε
+        # η απόσταση από τη ΦΥΣΙΚΗ θέση δεν είναι «ολίσθηση». Η ΕΠΑΦΗ παραμένει
+        # υποχρεωτική· το MAX_SLIDE δεν έχει νόημα εκεί.
+        _msl = 1e9 if (_an in P2_REPLACE or _an in COLLAPSE_BARS) else MAX_SLIDE
+        if _tlo + _sh <= _ahi + 1e-6 and _thi + _sh >= _alo - 1e-6 and abs(_sh) <= _msl + 1e-6:
+            continue
+        _lim_hi = min(_ahi - _tlo, _msl)          # μέγιστη επιτρεπτή ολίσθηση +
+        _lim_lo = max(_alo - _thi, -_msl)         # μέγιστη επιτρεπτή ολίσθηση -
+        _new_sh = min(max(_sh, _lim_lo), _lim_hi)
+        _d = _new_sh - _sh
+        _nt = (_at[0] + _aux*_d, _at[1] + _auy*_d)
+        if abs(_nt[0]) < 1e-9 and abs(_nt[1]) < 1e-9:
+            text_local_final.pop(_an, None)
+        else:
+            text_local_final[_an] = _nt
+        _anch_fixed += 1
+    if _anch_fixed:
+        print(f'ΑΓΚΥΡΩΣΗ ΕΤΙΚΕΤΩΝ: επαναφέρθηκαν σε επαφή με τη ράβδο τους {_anch_fixed}')
 
     return insert_final, text_local_final
 

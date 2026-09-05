@@ -467,6 +467,37 @@ for n_ in sorted(blocks):
             ieviol.append(n_)
             break
 print('ΙΕ) Κείμενο δοκού κομμένο από δομική γραμμή:', len(ieviol), ieviol[:8])
-print('AUDIT_TOTAL', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol)+len(stviol)+len(zviol)+len(hviol)+len(thviol)+len(iviol)+len(iaviol)+len(ibviol)+len(igviol)+len(idviol)+len(ieviol))
+# ΙΣΤ) ΑΠΟΚΟΛΛΗΣΗ ΚΑΤΑ ΜΗΚΟΣ: η ετικέτα οπλισμού επιτρέπεται να ολισθαίνει
+# κατά μήκος του άξονα της ράβδου της (ακόμη και στη νοητή προέκταση), αλλά
+# ΠΟΤΕ δεν χάνει την επαφή: το διάστημά της κατά μήκος πρέπει να τέμνει το
+# [lo,hi] της ράβδου. Χωρίς αυτή την κατηγορία το σφάλμα ήταν ΑΟΡΑΤΟ στο
+# AUDIT_TOTAL (περίπτωση marath00/FL0_SLABBAR7: 1.02μ κενό πάνω από το άκρο).
+isviol = []
+for n_ in sorted(blocks):
+    if not re.match(r'FL-?\d+_(SLABBAR|BEAMBAR)\d+$', n_):
+        continue
+    _dx6, _dy6 = ins.get(n_, (0, 0))
+    if re.match(r'FL-?\d+_BEAMBAR', n_) and _dx6 <= -49:
+        continue
+    _ln6, _ = block_lines_local(blocks[n_])
+    _bl6 = block_text_bboxes(blocks[n_])
+    if not _ln6 or not _bl6:
+        continue
+    _bs6 = max(_ln6, key=lambda q: math.hypot(q[2]-q[0], q[3]-q[1]))
+    _L6 = math.hypot(_bs6[2]-_bs6[0], _bs6[3]-_bs6[1])
+    if _L6 < 1e-9:
+        continue
+    _u6 = ((_bs6[2]-_bs6[0])/_L6, (_bs6[3]-_bs6[1])/_L6)
+    _pb6 = [p[0]*_u6[0]+p[1]*_u6[1] for s6 in _ln6 for p in ((s6[0], s6[1]), (s6[2], s6[3]))]
+    _lo6, _hi6 = min(_pb6), max(_pb6)
+    _pt6 = []
+    for _x6, _y6, _w6, _h6, _r6 in _bl6:
+        _b6 = text_bbox(_x6, _y6, _w6, _h6, _r6)
+        _pt6 += [_b6[0]*_u6[0]+_b6[1]*_u6[1], _b6[2]*_u6[0]+_b6[3]*_u6[1]]
+    _tlo6, _thi6 = min(_pt6), max(_pt6)
+    if _tlo6 > _hi6 + 1e-6 or _thi6 < _lo6 - 1e-6:
+        isviol.append((n_, round(max(_tlo6-_hi6, _lo6-_thi6), 3)))
+print('ΙΣΤ) Ετικέτα οπλισμού αποκολλημένη κατά μήκος από τη ράβδο της:', len(isviol), isviol[:8])
+print('AUDIT_TOTAL', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol)+len(stviol)+len(zviol)+len(hviol)+len(thviol)+len(iviol)+len(iaviol)+len(ibviol)+len(igviol)+len(idviol)+len(ieviol)+len(isviol))
 print('AUDIT_TOTAL_OLD_SCOPE', len(overlaps)+len(tight)+len(cv)+len(pcut)+len(eviol)+len(stviol)+len(zviol)+len(hviol)+len(thviol)+len(iviol)+len(iaviol)+len(ibviol)+len(igviol))
 _SUPPRESS_OLD_TOTAL = True
