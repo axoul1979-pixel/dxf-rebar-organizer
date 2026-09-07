@@ -21,6 +21,14 @@ src  = (SRC / 'base_index.html').read_text(encoding='utf-8')
 tail = (SRC / 'app.js').read_text(encoding='utf-8').replace(
        '/*__MERGE_MODULE__*/', (SRC / 'merge_dxf.js').read_text(encoding='utf-8'))
 
+# ΣΦΡΑΓΙΔΑ ΕΚΔΟΣΗΣ: hash του ΠΡΑΓΜΑΤΙΚΟΥ περιεχομένου (JS + ενσωματωμένη Python)
+# + ημερομηνία. Τυπώνεται στο log, ώστε να φαίνεται ΑΜΕΣΩΣ αν ο browser τρέχει
+# παλιό αρχείο από cache αντί για τη νέα έκδοση.
+import hashlib, datetime
+_h = hashlib.sha256((tail + src).encode('utf-8')).hexdigest()[:8]
+_stamp = datetime.datetime.now().strftime('%Y-%m-%d') + ' ' + _h
+tail = tail.replace('__BUILD_ID__', _stamp)
+
 i = src.index('const $ = id => document.getElementById(id);'); j = src.index('</script>', i)
 src = src[:i] + tail + '\n' + src[j:]
 

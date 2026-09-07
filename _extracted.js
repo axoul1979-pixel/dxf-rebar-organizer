@@ -2114,6 +2114,7 @@ const PIPELINE_B64 =
     "0KICAgIGlmIGNtZCA9PSAidGlkeSI6CiAgICAgICAgdGlkeSgqYXJncykKICAgIGVsaWYgY21kID09ICJhdWRpdCI6CiAgICAgICAgYXVkaXQo" +
     "KmFyZ3MpCiAgICBlbHNlOgogICAgICAgIHZlcmlmeSgqYXJncykK";
 
+const BUILD_ID = "2026-09-05 6a6d2926";   /* γεμίζει από το build/build_index.py */
 const $ = id => document.getElementById(id);
 const log = s => { $("log").textContent += s + "\n"; $("log").scrollTop = 1e9; };
 let workerReady = false, t0 = 0, tick = null;
@@ -3728,20 +3729,105 @@ function mergeLevels(items, cfgOverride) {
   if (host.sec.OBJECTS && host.sec.OBJECTS.length) section('OBJECTS', host.sec.OBJECTS);
   P.push(mk(0, 'EOF'));
 
+  // ΑΥΤΟΕΛΕΓΧΟΣ ΣΤΟ ΤΕΛΙΚΟ ΑΡΧΕΙΟ (όχι στα ενδιάμεσα): πόσα INSERT γράφτηκαν
+  // πράγματι με κλίμακα SEC_SCALE και σε πόσες διακριτές θέσεις κάθονται.
+  // Έτσι το «δεν δούλεψε η κλίμακα» παύει να είναι εντύπωση και γίνεται αριθμός.
+  var secScaled = 0, secPos = {}, nSecPos = 0;
+  for (var q9 = 0; q9 < outEnts.length; q9++) {
+    if (!(outEnts[q9].c === 0 && outEnts[q9].v === 'INSERT')) continue;
+    var sc9 = 1, px9 = null, py9 = null;
+    for (var r9 = q9 + 1; r9 < outEnts.length && !(outEnts[r9].c === 0); r9++) {
+      if (outEnts[r9].c === 41) sc9 = parseFloat(outEnts[r9].v);
+      else if (outEnts[r9].c === 10) px9 = outEnts[r9].v;
+      else if (outEnts[r9].c === 20) py9 = outEnts[r9].v;
+    }
+    if (Math.abs(sc9 - cfg.SEC_SCALE) < 1e-9) {
+      secScaled++;
+      var k9 = px9 + '|' + py9;
+      if (!secPos[k9]) { secPos[k9] = 1; nSecPos++; }
+    }
+  }
+
   return {
     text: ser(P, recs[0].f.eol),
     report: report, warnings: warnings,
     counts: { entitiesIn: nIn, entitiesOut: nOut, levels: levels.length,
               plans: recs.filter(function (r) { return r.kind !== 'detail'; }).length,
               details: recs.filter(function (r) { return r.kind === 'detail'; }).length,
+              secScaled: secScaled, secPositions: nSecPos,
+              secScale: cfg.SEC_SCALE,
               titles: cfg.TITLE ? recs.filter(function (r) { return r.kind !== 'detail'; }).length : 0 },
     extents: ext
   };
 }
 
+/* =====================================================================
+   ΕΝΑΣ ΚΡΙΤΗΣ ΓΙΑ ΤΗΝ ΠΡΟΕΤΟΙΜΑΣΙΑ ΠΡΙΝ ΤΗΝ ΕΝΟΠΟΙΗΣΗ
+
+   Πριν από αυτό, τα βήματα προετοιμασίας ζούσαν ΜΟΝΟ μέσα στο app.js:
+     * λεπτομέρειες  -> layoutSections  (διάταξη διατομών + κλίμακα x2.5)
+     * ξυλότυποι     -> dimensionPlan   (περιμετρικές διαστάσεις)
+                        copyStructure   (αντίγραφο σκελετού αριστερά)
+   Το merge_cli.js (που καλεί το TIDY_ALL.bat / batch_parallel.py) καλούσε
+   ΚΑΤΕΥΘΕΙΑΝ το mergeLevels, οπότε ΚΑΝΕΝΑ από τα τρία δεν εκτελούνταν: οι
+   διατομές έβγαιναν στοιβαγμένες σε ένα σημείο με κλίμακα 1, χωρίς διαστάσεις
+   και χωρίς αντίγραφο σκελετού. Δύο δρόμοι, δύο αποτελέσματα.
+
+   Πλέον ΚΑΙ ΟΙ ΔΥΟ δρόμοι περνούν από εδώ.
+   ===================================================================== */
+function prepareLevel(name, text, cfgOverride) {
+  var pl = parseLevelName(name);
+  var kind = pl ? pl.kind : 'plan';
+  var notes = [];
+  var cfg = cfgOverride || {};
+  if (kind === 'detail') {
+    var ls = layoutSections(text, cfg);
+    notes.push('Διατομές: ' + ls.groups.length + ' σύνολα, ' + ls.rows + ' σειρές, φύλλο ' +
+               ls.width.toFixed(1) + ' × ' + ls.height.toFixed(1) +
+               ' (×' + (cfg.SEC_SCALE || CFG.SEC_SCALE) + ')');
+    (ls.warnings || []).forEach(function (w) { notes.push('⚠ ' + w); });
+    return { kind: kind, text: ls.text, notes: notes, info: ls };
+  }
+  var t = text;
+  try {
+    var dm = dimensionPlan(t, cfg);
+    if (dm.added) {
+      t = dm.text;
+      notes.push('Διαστάσεις: ' + dm.added + ' οντότητες σε 4 πλευρές');
+    }
+    (dm.warnings || []).forEach(function (w) { notes.push('⚠ ' + w); });
+  } catch (e) { notes.push('⚠ Οι διαστάσεις δεν μπήκαν: ' + (e.message || e)); }
+  try {
+    var cp = copyStructure(t, cfg);
+    if (cp.copied) {
+      t = cp.text;
+      notes.push('Αντίγραφο σκελετού σε κενό ' + cp.gap + 'μ αριστερά (μετατόπιση ' +
+                 cp.dx.toFixed(2) + '): ' + (cp.copied - cp.lines) +
+                 ' blocks COLUMN & BEAM + ' + cp.lines + ' γραμμές slab_poly');
+    }
+    (cp.warnings || []).forEach(function (w) { notes.push('⚠ ' + w); });
+  } catch (e) { notes.push('⚠ Το αντίγραφο σκελετού δεν μπήκε: ' + (e.message || e)); }
+  return { kind: kind, text: t, notes: notes, info: null };
+}
+
+/* Προετοιμασία ΟΛΩΝ + ενοποίηση. Ό,τι καλεί αυτό παίρνει πανομοιότυπο
+   αποτέλεσμα, browser ή γραμμή εντολών. */
+function buildUnified(files, cfgOverride) {
+  var items = [], notes = [];
+  for (var i = 0; i < files.length; i++) {
+    var pr = prepareLevel(files[i].name, files[i].text, cfgOverride);
+    pr.notes.forEach(function (n) { notes.push(files[i].name + ': ' + n); });
+    items.push({ name: files[i].name, kind: pr.kind, text: pr.text });
+  }
+  var res = mergeLevels(items, cfgOverride);
+  res.prepNotes = notes;
+  return res;
+}
+
 var API = {
   CFG: CFG, mergeLevels: mergeLevels, parseLevelName: parseLevelName,
   layoutSections: layoutSections, dimensionPlan: dimensionPlan, copyStructure: copyStructure,
+  prepareLevel: prepareLevel, buildUnified: buildUnified,
   levelTitle: levelTitle, bytesToStr: bytesToStr, strToBytes: strToBytes,
   _analyze: analyzeFile, _parsePairs: parsePairs, _splitSections: splitSections,
   _chunkByZero: chunkByZero
@@ -3908,42 +3994,25 @@ async function runAll() {
       if (q.kind === 'detail') {
         /* ΛΕΠΤΟΜΕΡΕΙΕΣ: καμία τακτοποίηση οπλισμού - μόνο διάταξη διατομών */
         busy(true, "[" + (i+1) + "/" + queue.length + "] " + q.name + " — διάταξη διατομών…");
-        const res = DXFMERGE.layoutSections(DXFMERGE.bytesToStr(new Uint8Array(buf)));
-        q.out = DXFMERGE.strToBytes(res.text);
+        /* ΕΝΑΣ ΚΡΙΤΗΣ: ίδια συνάρτηση με το merge_cli.js (γραμμή εντολών). */
+        const pr = DXFMERGE.prepareLevel(q.name, DXFMERGE.bytesToStr(new Uint8Array(buf)));
+        const res = pr.info;
+        q.out = DXFMERGE.strToBytes(pr.text);
         q.status = "ΟΚ · " + res.rows + " σειρές";
         okCount++;
-        log("  Διατομές: " + res.groups.length + " σύνολα, " + res.rows + " σειρές, φύλλο " +
-            res.width.toFixed(1) + " × " + res.height.toFixed(1) + " (×" + DXFMERGE.CFG.SEC_SCALE + ")");
+        pr.notes.forEach(n => log("  " + n));
         log("  Σειρά ανάγνωσης: " + res.order.filter(Boolean).join(", "));
-        res.warnings.forEach(w => log("  ⚠ " + w));
         phase(1, "done"); phase(2, "done"); phase(3, "done");
       } else {
         const out = await runOne(buf);
         q.audit = sawZero;
-        /* περιμετρικές διαστάσεις: ΜΕΤΑ την τακτοποίηση και τον έλεγχο,
-           ώστε το AUDIT_TOTAL να αφορά μόνο τα κείμενα οπλισμού */
-        let dxf = out;
-        try {
-          const dm = DXFMERGE.dimensionPlan(DXFMERGE.bytesToStr(out));
-          if (dm.added) {
-            dxf = DXFMERGE.strToBytes(dm.text);
-            const sd = Object.keys(dm.sides).map(k => k + ":" + dm.sides[k].segs).join(" ");
-            log("  Διαστάσεις: " + dm.added + " οντότητες σε 4 πλευρές (τμήματα " + sd + ")");
-          }
-          dm.warnings.forEach(w => log("  ⚠ " + w));
-        } catch (e) { log("  ⚠ Οι διαστάσεις δεν μπήκαν: " + (e.message || e)); }
-        /* αντίγραφο σκελετού (μόνο COLUMN & BEAM) 100μ αριστερά - ΜΕΤΑ τις
-           διαστάσεις, ώστε να μην μετρήσει στην απόσταση ασφαλείας */
-        try {
-          const cp = DXFMERGE.copyStructure(DXFMERGE.bytesToStr(dxf));
-          if (cp.copied) {
-            dxf = DXFMERGE.strToBytes(cp.text);
-            log("  Αντίγραφο σκελετού σε κενό " + cp.gap + "μ αριστερά (μετατόπιση " +
-                cp.dx.toFixed(2) + "): " + (cp.copied - cp.lines) +
-                " blocks COLUMN & BEAM + " + cp.lines + " γραμμές slab_poly");
-          }
-          cp.warnings.forEach(w => log("  ⚠ " + w));
-        } catch (e) { log("  ⚠ Το αντίγραφο σκελετού δεν μπήκε: " + (e.message || e)); }
+        /* ΕΝΑΣ ΚΡΙΤΗΣ: περιμετρικές διαστάσεις + αντίγραφο σκελετού μέσω της
+           ΙΔΙΑΣ prepareLevel που καλεί και το merge_cli.js. ΜΕΤΑ την
+           τακτοποίηση και τον έλεγχο, ώστε το AUDIT_TOTAL να αφορά μόνο
+           τα κείμενα οπλισμού. */
+        const prp = DXFMERGE.prepareLevel(q.name, DXFMERGE.bytesToStr(out));
+        prp.notes.forEach(n => log("  " + n));
+        let dxf = DXFMERGE.strToBytes(prp.text);
         q.out = dxf;
         q.status = sawZero ? "ΟΚ · audit 0" : "ΠΡΟΣΟΧΗ · audit ≠ 0";
         if (sawZero) okCount++;
@@ -3977,6 +4046,7 @@ function mergeAll() {
     return;
   }
   log("\n===== ΕΝΟΠΟΙΗΣΗ ΣΤΑΘΜΩΝ =====");
+  log("  build: " + BUILD_ID);
   let res;
   try {
     res = DXFMERGE.mergeLevels(items.map(q => ({ name: q.name, kind: q.kind, text: DXFMERGE.bytesToStr(q.out) })));
@@ -3994,6 +4064,17 @@ function mergeAll() {
   log("  Οντότητες: " + res.counts.entitiesOut + " (από " + res.counts.entitiesIn + ") + " +
       res.counts.titles + " τίτλοι στάθμης.");
   if (res.counts.entitiesIn !== res.counts.entitiesOut) log("  ⚠ ΔΙΑΦΟΡΑ ΣΤΟ ΠΛΗΘΟΣ ΟΝΤΟΤΗΤΩΝ — έλεγξέ το.");
+  /* ΑΥΤΟΕΛΕΓΧΟΣ ΚΛΙΜΑΚΑΣ: μετριέται στο ΤΕΛΙΚΟ αρχείο που κατεβαίνει. */
+  if (res.counts.details) {
+    if (res.counts.secScaled) {
+      log("  Λεπτομέρειες: " + res.counts.secScaled + " inserts με κλίμακα ×" +
+          res.counts.secScale + " σε " + res.counts.secPositions +
+          " διακριτές θέσεις (έλεγχος στο τελικό DXF).");
+    } else {
+      log("  ⚠⚠ Η ΚΛΙΜΑΚΑ ×" + res.counts.secScale + " ΔΕΝ ΜΠΗΚΕ: 0 inserts με κλίμακα " +
+          "στο τελικό DXF. Στείλε αυτό το log.");
+    }
+  }
 
   const prefix = (items[0].prefix || "ktirio");
   const blob = new Blob([DXFMERGE.strToBytes(res.text)], { type: "application/dxf" });

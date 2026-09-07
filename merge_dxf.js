@@ -1593,20 +1593,105 @@ function mergeLevels(items, cfgOverride) {
   if (host.sec.OBJECTS && host.sec.OBJECTS.length) section('OBJECTS', host.sec.OBJECTS);
   P.push(mk(0, 'EOF'));
 
+  // ΑΥΤΟΕΛΕΓΧΟΣ ΣΤΟ ΤΕΛΙΚΟ ΑΡΧΕΙΟ (όχι στα ενδιάμεσα): πόσα INSERT γράφτηκαν
+  // πράγματι με κλίμακα SEC_SCALE και σε πόσες διακριτές θέσεις κάθονται.
+  // Έτσι το «δεν δούλεψε η κλίμακα» παύει να είναι εντύπωση και γίνεται αριθμός.
+  var secScaled = 0, secPos = {}, nSecPos = 0;
+  for (var q9 = 0; q9 < outEnts.length; q9++) {
+    if (!(outEnts[q9].c === 0 && outEnts[q9].v === 'INSERT')) continue;
+    var sc9 = 1, px9 = null, py9 = null;
+    for (var r9 = q9 + 1; r9 < outEnts.length && !(outEnts[r9].c === 0); r9++) {
+      if (outEnts[r9].c === 41) sc9 = parseFloat(outEnts[r9].v);
+      else if (outEnts[r9].c === 10) px9 = outEnts[r9].v;
+      else if (outEnts[r9].c === 20) py9 = outEnts[r9].v;
+    }
+    if (Math.abs(sc9 - cfg.SEC_SCALE) < 1e-9) {
+      secScaled++;
+      var k9 = px9 + '|' + py9;
+      if (!secPos[k9]) { secPos[k9] = 1; nSecPos++; }
+    }
+  }
+
   return {
     text: ser(P, recs[0].f.eol),
     report: report, warnings: warnings,
     counts: { entitiesIn: nIn, entitiesOut: nOut, levels: levels.length,
               plans: recs.filter(function (r) { return r.kind !== 'detail'; }).length,
               details: recs.filter(function (r) { return r.kind === 'detail'; }).length,
+              secScaled: secScaled, secPositions: nSecPos,
+              secScale: cfg.SEC_SCALE,
               titles: cfg.TITLE ? recs.filter(function (r) { return r.kind !== 'detail'; }).length : 0 },
     extents: ext
   };
 }
 
+/* =====================================================================
+   ΕΝΑΣ ΚΡΙΤΗΣ ΓΙΑ ΤΗΝ ΠΡΟΕΤΟΙΜΑΣΙΑ ΠΡΙΝ ΤΗΝ ΕΝΟΠΟΙΗΣΗ
+
+   Πριν από αυτό, τα βήματα προετοιμασίας ζούσαν ΜΟΝΟ μέσα στο app.js:
+     * λεπτομέρειες  -> layoutSections  (διάταξη διατομών + κλίμακα x2.5)
+     * ξυλότυποι     -> dimensionPlan   (περιμετρικές διαστάσεις)
+                        copyStructure   (αντίγραφο σκελετού αριστερά)
+   Το merge_cli.js (που καλεί το TIDY_ALL.bat / batch_parallel.py) καλούσε
+   ΚΑΤΕΥΘΕΙΑΝ το mergeLevels, οπότε ΚΑΝΕΝΑ από τα τρία δεν εκτελούνταν: οι
+   διατομές έβγαιναν στοιβαγμένες σε ένα σημείο με κλίμακα 1, χωρίς διαστάσεις
+   και χωρίς αντίγραφο σκελετού. Δύο δρόμοι, δύο αποτελέσματα.
+
+   Πλέον ΚΑΙ ΟΙ ΔΥΟ δρόμοι περνούν από εδώ.
+   ===================================================================== */
+function prepareLevel(name, text, cfgOverride) {
+  var pl = parseLevelName(name);
+  var kind = pl ? pl.kind : 'plan';
+  var notes = [];
+  var cfg = cfgOverride || {};
+  if (kind === 'detail') {
+    var ls = layoutSections(text, cfg);
+    notes.push('Διατομές: ' + ls.groups.length + ' σύνολα, ' + ls.rows + ' σειρές, φύλλο ' +
+               ls.width.toFixed(1) + ' × ' + ls.height.toFixed(1) +
+               ' (×' + (cfg.SEC_SCALE || CFG.SEC_SCALE) + ')');
+    (ls.warnings || []).forEach(function (w) { notes.push('⚠ ' + w); });
+    return { kind: kind, text: ls.text, notes: notes, info: ls };
+  }
+  var t = text;
+  try {
+    var dm = dimensionPlan(t, cfg);
+    if (dm.added) {
+      t = dm.text;
+      notes.push('Διαστάσεις: ' + dm.added + ' οντότητες σε 4 πλευρές');
+    }
+    (dm.warnings || []).forEach(function (w) { notes.push('⚠ ' + w); });
+  } catch (e) { notes.push('⚠ Οι διαστάσεις δεν μπήκαν: ' + (e.message || e)); }
+  try {
+    var cp = copyStructure(t, cfg);
+    if (cp.copied) {
+      t = cp.text;
+      notes.push('Αντίγραφο σκελετού σε κενό ' + cp.gap + 'μ αριστερά (μετατόπιση ' +
+                 cp.dx.toFixed(2) + '): ' + (cp.copied - cp.lines) +
+                 ' blocks COLUMN & BEAM + ' + cp.lines + ' γραμμές slab_poly');
+    }
+    (cp.warnings || []).forEach(function (w) { notes.push('⚠ ' + w); });
+  } catch (e) { notes.push('⚠ Το αντίγραφο σκελετού δεν μπήκε: ' + (e.message || e)); }
+  return { kind: kind, text: t, notes: notes, info: null };
+}
+
+/* Προετοιμασία ΟΛΩΝ + ενοποίηση. Ό,τι καλεί αυτό παίρνει πανομοιότυπο
+   αποτέλεσμα, browser ή γραμμή εντολών. */
+function buildUnified(files, cfgOverride) {
+  var items = [], notes = [];
+  for (var i = 0; i < files.length; i++) {
+    var pr = prepareLevel(files[i].name, files[i].text, cfgOverride);
+    pr.notes.forEach(function (n) { notes.push(files[i].name + ': ' + n); });
+    items.push({ name: files[i].name, kind: pr.kind, text: pr.text });
+  }
+  var res = mergeLevels(items, cfgOverride);
+  res.prepNotes = notes;
+  return res;
+}
+
 var API = {
   CFG: CFG, mergeLevels: mergeLevels, parseLevelName: parseLevelName,
   layoutSections: layoutSections, dimensionPlan: dimensionPlan, copyStructure: copyStructure,
+  prepareLevel: prepareLevel, buildUnified: buildUnified,
   levelTitle: levelTitle, bytesToStr: bytesToStr, strToBytes: strToBytes,
   _analyze: analyzeFile, _parsePairs: parsePairs, _splitSections: splitSections,
   _chunkByZero: chunkByZero

@@ -53,13 +53,18 @@ if (!items.length) {
 
 let res;
 try {
-  res = M.mergeLevels(items);
+  // ΕΝΑΣ ΚΡΙΤΗΣ: ίδια προετοιμασία με τον browser (διάταξη διατομών ×2.5,
+  // περιμετρικές διαστάσεις, αντίγραφο σκελετού) και μετά ενοποίηση.
+  res = M.buildUnified(items);
 } catch (e) {
   console.error('ΣΦΑΛΜΑ ενοποίησης: ' + (e && e.message ? e.message : e));
   process.exit(2);
 }
 
 fs.writeFileSync(outPath, res.text, 'latin1');
+
+console.log('--- ΠΡΟΕΤΟΙΜΑΣΙΑ ---');
+(res.prepNotes || []).forEach(n => console.log('  ' + n));
 
 console.log('--- ΕΝΟΠΟΙΗΣΗ ---');
 (res.report || []).forEach(r => {
@@ -71,5 +76,15 @@ console.log('--- ΕΝΟΠΟΙΗΣΗ ---');
 if (res.warnings && res.warnings.length) {
   console.log('--- ΠΡΟΕΙΔΟΠΟΙΗΣΕΙΣ ---');
   res.warnings.forEach(w => console.log('  ! ' + w));
+}
+/* ΑΥΤΟΕΛΕΓΧΟΣ ΚΛΙΜΑΚΑΣ στο ΤΕΛΙΚΟ αρχείο - ίδιος με του browser. */
+if (res.counts && res.counts.details) {
+  if (res.counts.secScaled) {
+    console.log('  Λεπτομέρειες: ' + res.counts.secScaled + ' inserts με κλίμακα ×' +
+                res.counts.secScale + ' σε ' + res.counts.secPositions + ' διακριτές θέσεις.');
+  } else {
+    console.log('  !! Η ΚΛΙΜΑΚΑ ×' + res.counts.secScale +
+                ' ΔΕΝ ΜΠΗΚΕ: 0 inserts με κλίμακα στο τελικό DXF.');
+  }
 }
 console.log('Γράφτηκε: ' + outPath);
